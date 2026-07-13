@@ -1,0 +1,17 @@
+services:
+  opentree:
+    container_name: OpenTree
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      OPENTREE_ADMIN_PASSWORD: "OpenTreeAdmin2026!"
+      OPENTREE_GUEST_PASSWORD: "OpenTreeInvitado2026!"
+      OPENTREE_DATA_DIR: "/data"
+      PORT: "8080"
+    volumes:
+      - opentree-data:/data
+
+volumes:
+  opentree-data:

@@ -1,0 +1,384 @@
+import { createServer } from "node:http";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { extname, join, normalize, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const rootDir = resolve(__dirname, "..");
+const distDir = resolve(rootDir, "dist");
+const dataDir = process.env.OPENTREE_DATA_DIR || (process.platform === "win32" ? join(rootDir, ".opentree-data") : "/data");
+const port = Number(process.env.PORT || process.env.OPENTREE_PORT || 8080);
+
+const configPath = join(dataDir, "config.json");
+const projectPath = join(dataDir, "project.json");
+const pendingPath = join(dataDir, "pending-project-changes.json");
+const sessions = new Map();
+
+const defaultProjectSettings = {
+  guestPhotoLimit: 50
+};
+
+function ensureDataDir() {
+  mkdirSync(dataDir, { recursive: true });
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function createId(prefix) {
+  return `${prefix}-${randomBytes(9).toString("hex")}`;
+}
+
+function hashPassword(password, salt = randomBytes(16).toString("hex")) {
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = String(stored || "").split(":");
+  if (!salt || !hash) return false;
+  const candidate = scryptSync(password, salt, 64);
+  const expected = Buffer.from(hash, "hex");
+  return expected.length === candidate.length && timingSafeEqual(expected, candidate);
+}
+
+function readJson(path, fallback) {
+  try {
+    if (!existsSync(path)) return fallback;
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    console.error(`Could not read ${path}`, error);
+    return fallback;
+  }
+}
+
+function writeJson(path, value) {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function loadConfig() {
+  ensureDataDir();
+  const existing = readJson(configPath, null);
+  if (existing?.users?.admin?.passwordHash && existing?.users?.guest?.passwordHash) {
+    return {
+      ...existing,
+      settings: { ...defaultProjectSettings, ...(existing.settings || {}) }
+    };
+  }
+
+  const adminPassword = process.env.OPENTREE_ADMIN_PASSWORD || "OpenTreeAdmin2026!";
+  const guestPassword = process.env.OPENTREE_GUEST_PASSWORD || "OpenTreeInvitado2026!";
+  const initial = {
+    users: {
+      admin: { passwordHash: hashPassword(adminPassword), updatedAt: now() },
+      guest: { passwordHash: hashPassword(guestPassword), updatedAt: now() }
+    },
+    settings: defaultProjectSettings,
+    createdAt: now(),
+    updatedAt: now()
+  };
+  writeJson(configPath, initial);
+  console.warn(
+    "OpenTree initial passwords created. Change them in Ajustes. Defaults: admin=OpenTreeAdmin2026!, invitado=OpenTreeInvitado2026!"
+  );
+  return initial;
+}
+
+let config = loadConfig();
+
+function loadProject() {
+  return readJson(projectPath, null);
+}
+
+function saveProject(project) {
+  const nextProject = {
+    ...project,
+    updatedAt: now()
+  };
+  writeJson(projectPath, nextProject);
+  return nextProject;
+}
+
+function loadPendingChanges() {
+  return readJson(pendingPath, []);
+}
+
+function savePendingChanges(changes) {
+  writeJson(pendingPath, changes);
+}
+
+function sanitizeGuestProject(proposedProject, currentProject) {
+  if (!currentProject) return proposedProject;
+  const proposedPeople = mergeById(currentProject.people || [], proposedProject.people || []);
+  const proposedRelationships = mergeById(currentProject.relationships || [], proposedProject.relationships || []);
+  const proposedPhotos = mergeById(currentProject.galleryPhotos || [], proposedProject.galleryPhotos || []);
+
+  return {
+    ...proposedProject,
+    id: currentProject.id,
+    name: currentProject.name,
+    locale: currentProject.locale,
+    people: proposedPeople,
+    relationships: proposedRelationships,
+    galleryPhotos: proposedPhotos,
+    displaySettings: currentProject.displaySettings,
+    contributionRequestMessage: currentProject.contributionRequestMessage,
+    surnameProfiles: currentProject.surnameProfiles,
+    nameProfiles: currentProject.nameProfiles,
+    clinicalConditions: currentProject.clinicalConditions,
+    clinicalConditionCategories: currentProject.clinicalConditionCategories,
+    worldHistoryEvents: currentProject.worldHistoryEvents,
+    famousBirths: currentProject.famousBirths,
+    contributions: currentProject.contributions,
+    createdAt: currentProject.createdAt,
+    updatedAt: now()
+  };
+}
+
+function mergeById(currentItems, proposedItems) {
+  const merged = new Map();
+  currentItems.forEach((item) => merged.set(item.id, item));
+  proposedItems.forEach((item) => merged.set(item.id, item));
+  return [...merged.values()];
+}
+
+function countPhotos(project) {
+  return Array.isArray(project?.galleryPhotos) ? project.galleryPhotos.length : 0;
+}
+
+function summarizeProjectChange(currentProject, proposedProject) {
+  const currentPeople = new Map((currentProject?.people || []).map((person) => [person.id, person]));
+  const proposedPeople = new Map((proposedProject?.people || []).map((person) => [person.id, person]));
+  const addedPeople = [...proposedPeople.keys()].filter((id) => !currentPeople.has(id)).length;
+  const editedPeople = [...proposedPeople.entries()].filter(([id, person]) => {
+    const current = currentPeople.get(id);
+    return current && JSON.stringify(current) !== JSON.stringify(person);
+  }).length;
+  const addedPhotos = Math.max(0, countPhotos(proposedProject) - countPhotos(currentProject));
+  const relationshipDelta = Math.max(
+    0,
+    (proposedProject?.relationships?.length || 0) - (currentProject?.relationships?.length || 0)
+  );
+  return { addedPeople, editedPeople, addedPhotos, relationshipDelta };
+}
+
+function getSession(request) {
+  const cookies = parseCookies(request.headers.cookie || "");
+  const token = cookies.opentree_session;
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  session.lastSeenAt = Date.now();
+  return { token, ...session };
+}
+
+function parseCookies(header) {
+  return Object.fromEntries(
+    header
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        return index === -1 ? [part, ""] : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      })
+  );
+}
+
+function sendJson(response, status, body, extraHeaders = {}) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...extraHeaders
+  });
+  response.end(JSON.stringify(body));
+}
+
+function readBody(request) {
+  return new Promise((resolveBody, reject) => {
+    let data = "";
+    request.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 100 * 1024 * 1024) {
+        reject(new Error("Payload too large"));
+        request.destroy();
+      }
+    });
+    request.on("end", () => {
+      try {
+        resolveBody(data ? JSON.parse(data) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function bootstrapPayload(session) {
+  const role = session?.role || null;
+  const pendingChanges = role === "admin" ? loadPendingChanges() : [];
+  return {
+    authenticated: Boolean(role),
+    role,
+    project: role ? loadProject() : null,
+    settings: config.settings,
+    pendingProjectChanges: pendingChanges
+  };
+}
+
+async function handleApi(request, response, pathname) {
+  const session = getSession(request);
+
+  if (request.method === "GET" && pathname === "/api/bootstrap") {
+    return sendJson(response, 200, bootstrapPayload(session));
+  }
+
+  if (request.method === "POST" && pathname === "/api/login") {
+    const body = await readBody(request);
+    const role = body.role === "guest" ? "guest" : "admin";
+    const user = config.users?.[role];
+    if (!user || !verifyPassword(String(body.password || ""), user.passwordHash)) {
+      return sendJson(response, 401, { error: "INVALID_CREDENTIALS" });
+    }
+
+    const token = randomBytes(32).toString("hex");
+    sessions.set(token, { role, createdAt: Date.now(), lastSeenAt: Date.now() });
+    return sendJson(response, 200, bootstrapPayload({ role }), {
+      "Set-Cookie": `opentree_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/`
+    });
+  }
+
+  if (request.method === "POST" && pathname === "/api/logout") {
+    if (session?.token) sessions.delete(session.token);
+    return sendJson(response, 200, { ok: true }, { "Set-Cookie": "opentree_session=; Max-Age=0; Path=/" });
+  }
+
+  if (!session) {
+    return sendJson(response, 401, { error: "AUTH_REQUIRED" });
+  }
+
+  if (request.method === "PUT" && pathname === "/api/project") {
+    const body = await readBody(request);
+    const proposedProject = body.project;
+    if (!proposedProject || !Array.isArray(proposedProject.people) || !Array.isArray(proposedProject.relationships)) {
+      return sendJson(response, 400, { error: "INVALID_PROJECT" });
+    }
+
+    if (session.role === "admin") {
+      const savedProject = saveProject(proposedProject);
+      return sendJson(response, 200, { status: "saved", project: savedProject, pendingProjectChanges: loadPendingChanges() });
+    }
+
+    const currentProject = loadProject();
+    const sanitizedProject = sanitizeGuestProject(proposedProject, currentProject);
+    const addedPhotos = Math.max(0, countPhotos(sanitizedProject) - countPhotos(currentProject));
+    if (addedPhotos > Number(config.settings.guestPhotoLimit || 0)) {
+      return sendJson(response, 413, { error: "GUEST_PHOTO_LIMIT_EXCEEDED", project: currentProject });
+    }
+
+    const pendingChanges = loadPendingChanges();
+    const nextChange = {
+      id: createId("guest-change"),
+      status: "pending",
+      role: "guest",
+      summary: summarizeProjectChange(currentProject, sanitizedProject),
+      proposedProject: sanitizedProject,
+      createdAt: now()
+    };
+    savePendingChanges([...pendingChanges, nextChange]);
+    return sendJson(response, 202, { status: "pending", project: currentProject });
+  }
+
+  if (session.role !== "admin") {
+    return sendJson(response, 403, { error: "ADMIN_REQUIRED" });
+  }
+
+  if (request.method === "POST" && pathname.match(/^\/api\/pending-project-changes\/[^/]+\/accept$/)) {
+    const id = pathname.split("/")[3];
+    const pendingChanges = loadPendingChanges();
+    const change = pendingChanges.find((candidate) => candidate.id === id);
+    if (!change) return sendJson(response, 404, { error: "NOT_FOUND" });
+    const savedProject = saveProject(change.proposedProject);
+    const remaining = pendingChanges.filter((candidate) => candidate.id !== id);
+    savePendingChanges(remaining);
+    return sendJson(response, 200, { project: savedProject, pendingProjectChanges: remaining });
+  }
+
+  if (request.method === "POST" && pathname.match(/^\/api\/pending-project-changes\/[^/]+\/reject$/)) {
+    const id = pathname.split("/")[3];
+    const pendingChanges = loadPendingChanges().filter((candidate) => candidate.id !== id);
+    savePendingChanges(pendingChanges);
+    return sendJson(response, 200, { project: loadProject(), pendingProjectChanges: pendingChanges });
+  }
+
+  if (request.method === "PUT" && pathname === "/api/settings") {
+    const body = await readBody(request);
+    const settings = {
+      ...config.settings,
+      guestPhotoLimit: Math.max(0, Number(body.settings?.guestPhotoLimit ?? config.settings.guestPhotoLimit ?? 50))
+    };
+    config = { ...config, settings, updatedAt: now() };
+    writeJson(configPath, config);
+    return sendJson(response, 200, { settings });
+  }
+
+  if (request.method === "PUT" && pathname === "/api/passwords") {
+    const body = await readBody(request);
+    const nextUsers = { ...config.users };
+    ["admin", "guest"].forEach((role) => {
+      const password = String(body.passwords?.[role] || "");
+      if (password.trim().length >= 8) {
+        nextUsers[role] = { passwordHash: hashPassword(password), updatedAt: now() };
+      }
+    });
+    config = { ...config, users: nextUsers, updatedAt: now() };
+    writeJson(configPath, config);
+    return sendJson(response, 200, { ok: true });
+  }
+
+  return sendJson(response, 404, { error: "NOT_FOUND" });
+}
+
+function serveStatic(request, response, pathname) {
+  const requestedPath = pathname === "/" ? "/index.html" : pathname;
+  const filePath = normalize(resolve(distDir, `.${decodeURIComponent(requestedPath)}`));
+  if (!filePath.startsWith(distDir) || !existsSync(filePath)) {
+    return serveStatic(request, response, "/index.html");
+  }
+
+  const mimeTypes = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon"
+  };
+  response.writeHead(200, {
+    "Content-Type": mimeTypes[extname(filePath).toLowerCase()] || "application/octet-stream"
+  });
+  createReadStream(filePath).pipe(response);
+}
+
+createServer(async (request, response) => {
+  try {
+    const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    if (url.pathname.startsWith("/api/")) {
+      await handleApi(request, response, url.pathname);
+      return;
+    }
+    serveStatic(request, response, url.pathname);
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: "INTERNAL_ERROR" });
+  }
+}).listen(port, "0.0.0.0", () => {
+  console.log(`OpenTree listening on http://0.0.0.0:${port}`);
+});

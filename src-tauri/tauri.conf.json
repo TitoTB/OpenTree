@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenTree",
+  "version": "0.1.0",
+  "identifier": "org.opentree.app",
+  "build": {
+    "beforeDevCommand": "npm.cmd run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm.cmd run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenTree",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis", "dmg", "app"],
+    "category": "Productivity",
+    "shortDescription": "Private local genealogy app",
+    "longDescription": "OpenTree helps people create private family trees locally on their own computer."
+  }
+}
