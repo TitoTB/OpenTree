@@ -27,27 +27,58 @@ If they are not provided, the first startup uses:
 
 Change them from `Ajustes > Acceso web` after the first login.
 
-## Docker Compose
+## Crear LXC automaticamente desde Proxmox
 
-```yaml
-services:
-  opentree:
-    container_name: OpenTree
-    build: .
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      OPENTREE_ADMIN_PASSWORD: "OpenTreeAdmin2026!"
-      OPENTREE_GUEST_PASSWORD: "OpenTreeInvitado2026!"
-      OPENTREE_DATA_DIR: "/data"
-      PORT: "8080"
-    volumes:
-      - opentree-data:/data
+Desde la shell del host Proxmox:
 
-volumes:
-  opentree-data:
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/proxmox_create_lxc.sh)"
 ```
+
+Opcionalmente puedes elegir parametros:
+
+```bash
+CTID=140 HOSTNAME=OpenTree MEMORY=2048 CORES=2 DISK=16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/proxmox_create_lxc.sh)"
+```
+
+Si tu almacenamiento no se llama `local-lvm`, indica otro:
+
+```bash
+ROOTFS_STORAGE=local bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/proxmox_create_lxc.sh)"
+```
+
+Despues abre:
+
+```text
+http://IP_DEL_CONTENEDOR:8080
+```
+
+## Instalacion en servidor Debian
+
+En un LXC o VM Debian ya creado:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/install_debian.sh)"
+```
+
+## Actualizar un LXC existente desde Proxmox
+
+Cuando haya una nueva version publicada en GitHub, no recrees el contenedor.
+Ejecuta desde la shell del host Proxmox:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/proxmox_update_lxc.sh)"
+```
+
+Si necesitas indicar el ID manualmente:
+
+```bash
+CTID=140 bash -c "$(curl -fsSL https://raw.githubusercontent.com/TitoTB/OpenTree/main/scripts/proxmox_update_lxc.sh)"
+```
+
+## Docker Compose alternativo
+
+Tambien se mantiene un `docker-compose.yml` para instalaciones Docker manuales.
 
 ## Local Development
 
