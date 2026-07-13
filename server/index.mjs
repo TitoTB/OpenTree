@@ -405,6 +405,43 @@ async function handlePublicMetadataProxy(request, response, searchParams) {
   return sendJson(response, 200, parsePublicMetadata(html, proxyResponse.url || targetUrl));
 }
 
+async function handlePublicImageProxy(request, response, searchParams) {
+  if (request.method !== "GET") {
+    response.writeHead(405, { Allow: "GET" });
+    response.end();
+    return;
+  }
+
+  const targetUrl = normalizePublicMetadataUrl(searchParams.get("url") || "");
+  if (!targetUrl) {
+    return sendJson(response, 400, { error: "INVALID_PUBLIC_IMAGE_URL" });
+  }
+
+  const imageResponse = await fetch(targetUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+      Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    }
+  });
+
+  if (!imageResponse.ok) {
+    return sendJson(response, imageResponse.status, { error: "PUBLIC_IMAGE_ERROR" });
+  }
+
+  const contentType = imageResponse.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    return sendJson(response, 415, { error: "PUBLIC_IMAGE_UNSUPPORTED_CONTENT" });
+  }
+
+  const body = Buffer.from(await imageResponse.arrayBuffer());
+  response.writeHead(200, {
+    "Content-Type": contentType,
+    "Cache-Control": "public, max-age=604800, immutable"
+  });
+  response.end(body);
+}
+
 function normalizePublicMetadataUrl(value) {
   const trimmed = String(value || "").trim();
   if (!trimmed) return "";
@@ -438,7 +475,7 @@ function parsePublicMetadata(html, sourceUrl) {
     title: cleanHtmlText(title),
     url: sourceUrl,
     snippet: cleanHtmlText(snippet),
-    imageUrl: resolvePublicMetadataAssetUrl(imageUrl, sourceUrl)
+    imageUrl: proxyPublicMetadataImageUrl(resolvePublicMetadataAssetUrl(imageUrl, sourceUrl))
   };
 }
 
@@ -472,6 +509,10 @@ function resolvePublicMetadataAssetUrl(assetUrl, sourceUrl) {
   } catch {
     return assetUrl;
   }
+}
+
+function proxyPublicMetadataImageUrl(imageUrl) {
+  return imageUrl ? `/public-image?url=${encodeURIComponent(imageUrl)}` : "";
 }
 
 function cleanHtmlText(value) {
@@ -528,6 +569,10 @@ createServer(async (request, response) => {
     }
     if (url.pathname === "/public-metadata") {
       await handlePublicMetadataProxy(request, response, url.searchParams);
+      return;
+    }
+    if (url.pathname === "/public-image") {
+      await handlePublicImageProxy(request, response, url.searchParams);
       return;
     }
     serveStatic(request, response, url.pathname);

@@ -237,7 +237,7 @@ export function App() {
   );
 
   useEffect(() => {
-    if (serverMode && serverRole === "guest" && activeView === "customization") {
+    if (serverMode && serverRole === "guest" && ["customization", "contributions"].includes(activeView)) {
       setActiveView("tree");
     }
   }, [activeView, serverMode, serverRole]);
@@ -425,6 +425,7 @@ export function App() {
   }
 
   function showContributionsView() {
+    if (serverMode && serverRole !== "admin") return;
     setActiveView("contributions");
     setSidebarOpen(false);
   }
@@ -1722,15 +1723,17 @@ export function App() {
             <Image size={20} />
             <span>{t.gallery}</span>
           </button>
-          <button
-            className={activeView === "contributions" ? "active" : ""}
-            type="button"
-            title={t.contributionInbox}
-            onClick={showContributionsView}
-          >
-            <Inbox size={20} />
-            <span>{t.contributionInbox}</span>
-          </button>
+          {serverRole === "admin" ? (
+            <button
+              className={activeView === "contributions" ? "active" : ""}
+              type="button"
+              title={t.contributionInbox}
+              onClick={showContributionsView}
+            >
+              <Inbox size={20} />
+              <span>{t.contributionInbox}</span>
+            </button>
+          ) : null}
           {serverRole === "admin" ? (
             <button
               className={activeView === "customization" ? "active" : ""}
@@ -2636,9 +2639,7 @@ function LoginScreen({
         <div className="wizard-brand">
           <img className="brand-logo" src="/opentree-logo.png" alt="OpenTree" />
         </div>
-        <div className="wizard-copy">
-          <span className="eyebrow">OpenTree</span>
-          <h2>Acceso privado</h2>
+        <div className="wizard-copy login-copy">
           <p>Inicia sesión como administrador o invitado para consultar y aportar información al árbol.</p>
         </div>
         <form
@@ -3340,8 +3341,7 @@ function PublicInfoPreviewCard({
   return (
     <div className="public-preview-card">
       <a className="public-preview-media" href={link.url} target="_blank" rel="noreferrer" aria-label={t.openSource}>
-        <span className="public-preview-fallback">{fallbackLabel}</span>
-        {link.imageUrl ? <img src={link.imageUrl} alt="" loading="lazy" /> : null}
+        {link.imageUrl ? <img src={link.imageUrl} alt="" loading="lazy" /> : <span className="public-preview-fallback">{fallbackLabel}</span>}
       </a>
       <div>
         <a className="public-preview-title" href={link.url} target="_blank" rel="noreferrer">
@@ -6370,7 +6370,11 @@ function FamilyHistoryTimeline({
 
     async function loadWorldEvents() {
       if (!selectedEvent || !selectedCacheKey) return;
-      if (selectedWorldEvents.length > 0) {
+      if (
+        selectedWorldEvents.length >= 6 &&
+        hasSpainWorldHistoryEntry(selectedWorldEvents) &&
+        hasGlobalWorldHistoryEntry(selectedWorldEvents)
+      ) {
         setWorldStatus("");
         return;
       }
@@ -6416,7 +6420,12 @@ function FamilyHistoryTimeline({
             selectedCacheKey,
             selectedEvent.date.getMonth() + 1
           );
-          entries = mergeWorldHistoryEntries([...entries, ...yearEntries], selectedYear).slice(0, 8);
+          const spainEntries = await fetchWikipediaSpainYearHistoryEntries(
+            selectedYear,
+            selectedCacheKey,
+            selectedEvent.date.getMonth() + 1
+          ).catch(() => []);
+          entries = mergeWorldHistoryEntries([...entries, ...spainEntries, ...yearEntries], selectedYear).slice(0, 8);
         }
         if (!cancelled) {
           onSaveWorldHistoryEvents(selectedCacheKey, entries);
@@ -6721,6 +6730,41 @@ async function fetchWikipediaYearHistoryEntries(
     .filter(isUsefulWorldHistoryEntry);
 }
 
+async function fetchWikipediaSpainYearHistoryEntries(
+  year: number,
+  dateKey: string,
+  preferredMonth?: number
+): Promise<WorldHistoryEntry[]> {
+  const pageTitle = `Anexo:España_en_${year}`;
+  const sourceUrl = `https://es.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
+  const apiUrl = `https://es.wikipedia.org/w/api.php?action=parse&format=json&origin=*&page=${encodeURIComponent(
+    pageTitle
+  )}&prop=text&disablelimitreport=1&disableeditsection=1`;
+  const response = await fetch(apiUrl);
+  if (!response.ok) throw new Error(`Wikipedia Spain year HTTP ${response.status}`);
+  const data = (await response.json()) as { parse?: { text?: Record<string, string> }; error?: unknown };
+  const html = data.parse?.text?.["*"] ?? "";
+  if (!html) return [];
+
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const items = collectWikipediaSpainYearListItems(document);
+  const monthItems = preferredMonth ? items.filter((item) => item.month === preferredMonth) : [];
+  const primaryItems = monthItems.length ? monthItems : items;
+
+  return dedupeHistoricalItems(primaryItems)
+    .slice(0, 4)
+    .map((item, index) => ({
+      key: `${dateKey}-spain-year-${index}`,
+      dateKey,
+      year,
+      text: formatHistoricalEntryText(item.text, "spain"),
+      sourceName: "Wikimedia" as const,
+      sourceUrl,
+      fetchedAt: new Date().toISOString()
+    }))
+    .filter(isUsefulWorldHistoryEntry);
+}
+
 function collectWikipediaYearListItems(document: Document) {
   const items: Array<{ text: string; kind: "event" | "birth"; category: "spain" | "world"; month?: number }> = [];
   let section: "events" | "births" | "" = "";
@@ -6754,6 +6798,35 @@ function collectWikipediaYearListItems(document: Document) {
           text,
           kind: section === "births" ? "birth" : "event",
           category,
+          month: extractHistoricalItemMonth(rawText) ?? currentMonth
+        });
+      });
+  });
+
+  return items;
+}
+
+function collectWikipediaSpainYearListItems(document: Document) {
+  const items: Array<{ text: string; month?: number }> = [];
+  let currentMonth: number | undefined;
+  const nodes = Array.from(document.body.querySelectorAll("h2, h3, h4, ul"));
+
+  nodes.forEach((node) => {
+    if (["H2", "H3", "H4"].includes(node.tagName)) {
+      const month = getSpanishMonthNumberFromText(node.textContent ?? "");
+      if (month) currentMonth = month;
+      return;
+    }
+
+    if (node.tagName !== "UL") return;
+    Array.from(node.children)
+      .filter((child) => child.tagName === "LI")
+      .forEach((child) => {
+        const rawText = child.textContent ?? "";
+        const text = cleanHistoricalListText(rawText);
+        if (!text || !isUsefulWorldHistoryText(text)) return;
+        items.push({
+          text,
           month: extractHistoricalItemMonth(rawText) ?? currentMonth
         });
       });

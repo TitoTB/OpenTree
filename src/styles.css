@@ -67,7 +67,19 @@ p {
 }
 
 .login-shell {
-  width: min(520px, 100%);
+  width: min(420px, 100%);
+  gap: 18px;
+  padding: 28px;
+}
+
+.login-copy {
+  text-align: center;
+}
+
+.login-copy p {
+  max-width: 300px;
+  margin-inline: auto;
+  font-size: 0.92rem;
 }
 
 .form-error {
@@ -2575,7 +2587,7 @@ button.zodiac-badge:hover {
   top: var(--view-padding-top);
   left: var(--view-padding-left);
   right: var(--view-padding-right);
-  z-index: 1;
+  z-index: 40;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
