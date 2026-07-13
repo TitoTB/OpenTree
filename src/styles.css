@@ -727,17 +727,22 @@ p {
   color: var(--muted);
 }
 
+.profile-missing-value {
+  color: #a42828;
+  font-weight: 850;
+}
+
 .gender-symbol-badge {
   display: inline-grid;
   place-items: center;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
   border-radius: 999px;
   color: var(--brand-deep);
   background: var(--brand-soft);
   font-family: "Segoe UI Symbol", "Noto Sans Symbols", "Apple Symbols", sans-serif;
-  font-size: 0.9rem;
+  font-size: 1.08rem;
   font-weight: 900;
   line-height: 1;
 }
@@ -748,7 +753,7 @@ p {
   width: 1em;
   height: 1em;
   line-height: 1;
-  transform: translateY(-0.015em);
+  transform: translateY(-0.01em);
 }
 
 .gender-symbol-female {
@@ -767,8 +772,8 @@ p {
 }
 
 .gender-symbol-unknown {
-  color: var(--brand-deep);
-  background: #d9efea;
+  color: #a42828;
+  background: #ffe1e1;
 }
 
 .zodiac-badge {
@@ -941,14 +946,18 @@ button.zodiac-badge:hover {
   vertical-align: baseline;
 }
 
-.readonly-field.warning {
+.readonly-field.warning,
+.readonly-field.missing {
   background: rgba(255, 241, 241, 0.92);
   border-color: rgba(198, 44, 44, 0.34);
 }
 
 .readonly-field.warning span,
 .readonly-field.warning strong,
-.readonly-field.warning small {
+.readonly-field.warning small,
+.readonly-field.missing span,
+.readonly-field.missing strong,
+.readonly-field.missing small {
   color: #a42828;
 }
 
@@ -956,6 +965,12 @@ button.zodiac-badge:hover {
   font-size: 0.72rem;
   font-weight: 800;
   line-height: 1.2;
+}
+
+.relationship-date-list input.missing {
+  color: #a42828;
+  background: rgba(255, 241, 241, 0.92);
+  border-color: rgba(198, 44, 44, 0.34);
 }
 
 .star-map-panel {

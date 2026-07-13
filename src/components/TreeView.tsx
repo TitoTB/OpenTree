@@ -105,7 +105,14 @@ export function TreeView({
 
         const coupleRect = coupleRow.getBoundingClientRect();
         const childrenRect = childrenRow.getBoundingClientRect();
-        const parentX = toLocalX(coupleRect.left - stageRect.left + coupleRect.width / 2);
+        const visiblePartnerConnectors = Array.from(
+          coupleRow.querySelectorAll<HTMLElement>(":scope .partner-connector:not(.timeline-hidden)")
+        );
+        const parentAnchorRect =
+          visiblePartnerConnectors.length > 0
+            ? getCenteredRect(visiblePartnerConnectors.map((element) => element.getBoundingClientRect()))
+            : coupleRect;
+        let parentX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
         const parentBottomY = toLocalY(coupleRect.bottom - stageRect.top);
         const junctionY = toLocalY(childrenRect.top - stageRect.top);
         const childPoints = childAnchors.map((anchor) => {
@@ -115,16 +122,21 @@ export function TreeView({
             y: toLocalY(anchorRect.top - stageRect.top)
           };
         });
+        if (childPoints.length === 1 && Math.abs(parentX - childPoints[0].x) < 10) {
+          parentX = childPoints[0].x;
+        }
         const horizontalXs = [parentX, ...childPoints.map((point) => point.x)];
         const minX = Math.min(...horizontalXs);
         const maxX = Math.max(...horizontalXs);
 
-        nextConnectors.push({ d: `M ${parentX} ${parentBottomY} V ${junctionY}` });
-        if (maxX > minX) {
-          nextConnectors.push({ d: `M ${minX} ${junctionY} H ${maxX}` });
+        nextConnectors.push({ d: `M ${formatCoord(parentX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
+        if (maxX - minX > 0.5) {
+          nextConnectors.push({ d: `M ${formatCoord(minX)} ${formatCoord(junctionY)} H ${formatCoord(maxX)}` });
         }
         childPoints.forEach((point) => {
-          nextConnectors.push({ d: `M ${point.x} ${junctionY} V ${point.y}` });
+          nextConnectors.push({
+            d: `M ${formatCoord(point.x)} ${formatCoord(junctionY)} V ${formatCoord(point.y)}`
+          });
         });
       });
 
@@ -154,7 +166,7 @@ export function TreeView({
       resizeObserver.disconnect();
       window.removeEventListener("resize", updateConnectors);
     };
-  }, [nodes, displaySettings, viewportScale, visiblePersonIds]);
+  }, [nodes, displaySettings, viewportScale, visiblePersonIds, visiblePartnerRelationshipKeys]);
 
   if (nodes.length === 0) return null;
 
@@ -393,6 +405,26 @@ function getBranchSide(index: number, total: number): BranchSide | undefined {
   if (index < midpoint) return "left";
   if (index > midpoint) return "right";
   return undefined;
+}
+
+function getCenteredRect(rects: DOMRect[]) {
+  const minX = Math.min(...rects.map((rect) => rect.left));
+  const maxX = Math.max(...rects.map((rect) => rect.right));
+  const minY = Math.min(...rects.map((rect) => rect.top));
+  const maxY = Math.max(...rects.map((rect) => rect.bottom));
+
+  return {
+    left: minX,
+    top: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+    right: maxX,
+    bottom: maxY
+  };
+}
+
+function formatCoord(value: number) {
+  return Number(value.toFixed(2));
 }
 
 function isTimelineVisible(personId: string, visiblePersonIds?: Set<string>) {

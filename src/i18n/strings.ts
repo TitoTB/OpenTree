@@ -31,11 +31,12 @@ const baseStrings = {
     acceptField: "Aceptar dato",
     rejectField: "Rechazar dato",
     noContributions: "No hay aportes pendientes",
-    noContributionsHint: "Genera un formulario desde una ficha, envíalo por correo e importa aquí el archivo .json que te devuelvan.",
+    noContributionsHint: "Cuando un invitado proponga cambios desde la aplicación, aparecerán aquí para que el administrador los revise.",
     contributionImportError: "No se ha podido importar el archivo. Comprueba que sea un aporte de OpenTree.",
     contributionUnknownPerson: "El aporte pertenece a una persona que no existe en este árbol.",
     unknownContributor: "Colaborador no indicado",
     emptyValue: "Sin dato",
+    missingFields: "Falta",
     status_pending: "Pendiente",
     status_accepted: "Aceptado",
     status_rejected: "Rechazado",
@@ -382,8 +383,8 @@ const baseStrings = {
     rootPerson: "Persona raíz",
     living: "Vivo/a o sin fecha registrada",
     verticalTree: "Árbol vertical",
-    contributionInbox: "Aportes externos",
-    contributionHint: "Google Forms, CSV o correo entrarán aquí para revisión."
+    contributionInbox: "Validación de cambios",
+    contributionHint: "Los cambios enviados por invitados aparecerán aquí para revisión."
   },
   en: {
     appSubtitle: "Private, local and open genealogy",
@@ -415,11 +416,12 @@ const baseStrings = {
     acceptField: "Accept field",
     rejectField: "Reject field",
     noContributions: "No pending contributions",
-    noContributionsHint: "Generate a form from a profile, email it, and import the returned .json file here.",
+    noContributionsHint: "When a guest proposes changes inside the app, they will appear here for admin review.",
     contributionImportError: "The file could not be imported. Check that it is an OpenTree contribution.",
     contributionUnknownPerson: "This contribution belongs to a person that does not exist in this tree.",
     unknownContributor: "Contributor not provided",
     emptyValue: "No data",
+    missingFields: "Missing",
     status_pending: "Pending",
     status_accepted: "Accepted",
     status_rejected: "Rejected",
@@ -766,8 +768,8 @@ const baseStrings = {
     rootPerson: "Root person",
     living: "Living or no date recorded",
     verticalTree: "Vertical tree",
-    contributionInbox: "External contributions",
-    contributionHint: "Google Forms, CSV or email input will arrive here for review."
+    contributionInbox: "Change review",
+    contributionHint: "Guest changes submitted from the app will appear here for review."
   }
 } as const;
 
@@ -908,7 +910,7 @@ const caStrings: Record<string, string> = {
   years: "anys",
   deceased: "Difunt/a",
   noDate: "Edat no registrada",
-  contributionInbox: "Aportacions externes"
+  contributionInbox: "Validació de canvis"
 };
 
 const glStrings: Record<string, string> = {
@@ -1048,7 +1050,7 @@ const glStrings: Record<string, string> = {
   years: "anos",
   deceased: "Falecido/a",
   noDate: "Idade non rexistrada",
-  contributionInbox: "Achegas externas"
+  contributionInbox: "Validación de cambios"
 };
 
 const euStrings: Record<string, string> = {
@@ -1188,7 +1190,7 @@ const euStrings: Record<string, string> = {
   years: "urte",
   deceased: "Hildakoa",
   noDate: "Adina erregistratu gabe",
-  contributionInbox: "Kanpoko ekarpenak"
+  contributionInbox: "Aldaketen baliozkotzea"
 };
 
 export const strings = {

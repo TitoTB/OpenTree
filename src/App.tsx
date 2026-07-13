@@ -20,7 +20,6 @@ import {
   ImagePlus,
   Inbox,
   Languages,
-  Mail,
   MapPinned,
   Maximize2,
   Moon,
@@ -37,7 +36,6 @@ import {
   Sun,
   Trash2,
   TreePine,
-  Upload,
   Users,
   X,
   ZoomIn,
@@ -168,7 +166,6 @@ export function App() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const treeCanvasRef = useRef<HTMLElement | null>(null);
   const treeContentRef = useRef<HTMLDivElement | null>(null);
-  const contributionInputRef = useRef<HTMLInputElement>(null);
   const surnameAutoEnrichmentRef = useRef({ running: false, signature: "" });
   const givenNameAutoEnrichmentRef = useRef({ running: false, signature: "" });
   const t = strings[locale];
@@ -184,11 +181,10 @@ export function App() {
     showDeceasedSymbol: project?.displaySettings?.showDeceasedSymbol ?? true,
     showGenerationLines: project?.displaySettings?.showGenerationLines ?? true,
     showSaintDays: project?.displaySettings?.showSaintDays ?? true,
-    showClinicalConditions: project?.displaySettings?.showClinicalConditions ?? true,
+    showClinicalConditions: project?.displaySettings?.showClinicalConditions ?? false,
     darkMode: project?.displaySettings?.darkMode ?? false,
     treeStyle: normalizeTreeStyle(project?.displaySettings?.treeStyle)
   };
-  const contributionRequestMessage = project?.contributionRequestMessage ?? t.defaultRequestMessage;
 
   useEffect(() => {
     let cancelled = false;
@@ -255,7 +251,6 @@ export function App() {
     () => (project ? buildPersonGenerationLabels(project.people, project.relationships) : {}),
     [project]
   );
-  const pendingContributions = (project?.contributions ?? []).filter(isPendingContribution);
   const surnameSummaries = useMemo(() => buildSurnameSummaries(project?.people ?? []), [project]);
   const effectiveSelectedSurname = selectedSurname || surnameSummaries[0]?.surname || "";
   const selectedNameProfile = selectedGivenName
@@ -461,195 +456,6 @@ export function App() {
     setFatherDraft(emptyPersonDraft);
     setPan({ x: 0, y: 0 });
     setTreeZoom(1);
-  }
-
-  async function requestPersonInfo(person: Person) {
-    if (!project) return;
-    if (person.isDeceased || person.deathDate) {
-      window.alert(t.requestOnlyLiving);
-      return;
-    }
-
-    const requestId = createId("request");
-    const fileName = `opentree-solicitud-${slugify(fullName(person) || t.person)}.html`;
-    const html = buildContributionRequestHtml({
-      requestId,
-      projectName: project.name,
-      person,
-      relatedPeople: getContributionRelatedPeople(person),
-      locale,
-      personalMessage: contributionRequestMessage,
-      logoDataUrl: await loadLogoDataUrl()
-    });
-
-    downloadTextFile(fileName, html, "text/html");
-    window.alert(t.requestInfoCreated);
-  }
-
-  function getContributionRelatedPeople(person: Person) {
-    if (!project) return [];
-
-    const peopleById = new Map(project.people.map((candidate) => [candidate.id, candidate]));
-    const parentIds = project.relationships
-      .filter((relationship) => relationship.kind === "parent_child" && relationship.toPersonId === person.id)
-      .map((relationship) => relationship.fromPersonId);
-    const childIds = project.relationships
-      .filter((relationship) => relationship.kind === "parent_child" && relationship.fromPersonId === person.id)
-      .map((relationship) => relationship.toPersonId);
-    const partnerIds = project.relationships
-      .filter(
-        (relationship) =>
-          ["partner", "spouse", "former_spouse"].includes(relationship.kind) &&
-          (relationship.fromPersonId === person.id || relationship.toPersonId === person.id)
-      )
-      .map((relationship) =>
-        relationship.fromPersonId === person.id ? relationship.toPersonId : relationship.fromPersonId
-      );
-    const siblingIds = project.relationships
-      .filter(
-        (relationship) =>
-          relationship.kind === "parent_child" &&
-          parentIds.includes(relationship.fromPersonId) &&
-          relationship.toPersonId !== person.id
-      )
-      .map((relationship) => relationship.toPersonId);
-    const grandchildIds = project.relationships
-      .filter((relationship) => relationship.kind === "parent_child" && childIds.includes(relationship.fromPersonId))
-      .map((relationship) => relationship.toPersonId);
-    const relatedEntries: Array<{ relationshipLabel: string; person: Person }> = [];
-    const addedIds = new Set<string>();
-
-    function addRelated(label: string, ids: string[]) {
-      [...new Set(ids)]
-        .filter((id) => id !== person.id && !addedIds.has(id))
-        .forEach((id) => {
-          const relatedPerson = peopleById.get(id);
-          if (!relatedPerson) return;
-
-          addedIds.add(id);
-          relatedEntries.push({ relationshipLabel: label, person: relatedPerson });
-        });
-    }
-
-    addRelated(t.parents, parentIds);
-    addRelated(t.siblings, siblingIds);
-    addRelated(t.partners, partnerIds);
-    addRelated(t.children, childIds);
-    addRelated(t.grandchildren, grandchildIds);
-
-    return relatedEntries;
-  }
-
-  async function importContributionFile(file: File) {
-    if (!project) return;
-
-    try {
-      const parsed = JSON.parse(await file.text()) as Partial<ContributionRecord>;
-      const contribution = normalizeContribution(parsed);
-      const targetExists = project.people.some((person) => person.id === contribution.targetPersonId);
-
-      if (!targetExists) {
-        window.alert(t.contributionUnknownPerson);
-        return;
-      }
-
-      const nextProject = {
-        ...project,
-        contributions: [...(project.contributions ?? []), contribution],
-        updatedAt: new Date().toISOString()
-      };
-      setProject(nextProject);
-      setActiveView("contributions");
-      saveProject(nextProject);
-    } catch {
-      window.alert(t.contributionImportError);
-    } finally {
-      if (contributionInputRef.current) {
-        contributionInputRef.current.value = "";
-      }
-    }
-  }
-
-  function acceptContribution(contribution: ContributionRecord) {
-    if (!project) return;
-
-    const nextProject = {
-      ...project,
-      people: project.people.map((person) => {
-        if (person.id === contribution.targetPersonId) {
-          return applyContributionPatch(person, contribution.personPatch);
-        }
-
-        const relatedPatch = contribution.relatedPatches?.find((patch) => patch.targetPersonId === person.id);
-        return relatedPatch ? applyContributionPatch(person, relatedPatch.personPatch) : person;
-      }),
-      contributions: (project.contributions ?? []).map((candidate) =>
-        candidate.id === contribution.id ? { ...candidate, status: "accepted" as const } : candidate
-      ),
-      updatedAt: new Date().toISOString()
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
-  function acceptContributionField(
-    contribution: ContributionRecord,
-    targetPersonId: string,
-    field: keyof ContributionRecord["personPatch"]
-  ) {
-    if (!project) return;
-
-    const patch = getContributionPatchFor(contribution, targetPersonId);
-    if (!patch || patch[field] === undefined) return;
-
-    const nextProject = {
-      ...project,
-      people: project.people.map((person) =>
-        person.id === targetPersonId ? applyContributionPatch(person, { [field]: patch[field] }) : person
-      ),
-      contributions: (project.contributions ?? []).map((candidate) =>
-        candidate.id === contribution.id ? removeContributionField(candidate, targetPersonId, field) : candidate
-      ),
-      updatedAt: new Date().toISOString()
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
-  function rejectContributionField(
-    contribution: ContributionRecord,
-    targetPersonId: string,
-    field: keyof ContributionRecord["personPatch"]
-  ) {
-    if (!project) return;
-
-    const nextProject = {
-      ...project,
-      contributions: (project.contributions ?? []).map((candidate) =>
-        candidate.id === contribution.id ? removeContributionField(candidate, targetPersonId, field) : candidate
-      ),
-      updatedAt: new Date().toISOString()
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
-  function rejectContribution(contribution: ContributionRecord) {
-    if (!project) return;
-
-    const nextProject = {
-      ...project,
-      contributions: (project.contributions ?? []).map((candidate) =>
-        candidate.id === contribution.id ? { ...candidate, status: "rejected" as const } : candidate
-      ),
-      updatedAt: new Date().toISOString()
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
   }
 
   function addRelativeFromTree(person: Person, kind: AddRelativeKind) {
@@ -1233,18 +1039,6 @@ export function App() {
     saveProject(nextProject);
   }
 
-  function updateContributionRequestMessage(message: string) {
-    if (!project) return;
-
-    const nextProject = {
-      ...project,
-      contributionRequestMessage: message,
-      updatedAt: new Date().toISOString()
-    };
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
   function updateSurnameProfile(surname: string, patch: Partial<SurnameProfile>) {
     if (!project) return;
     const key = normalizeSurnameKey(surname);
@@ -1730,10 +1524,9 @@ export function App() {
         showDeceasedSymbol: true,
         showGenerationLines: true,
         showSaintDays: true,
-        showClinicalConditions: true,
+        showClinicalConditions: false,
         darkMode: false
       },
-      contributionRequestMessage: t.defaultRequestMessage,
       createdAt: now,
       updatedAt: now
     };
@@ -2409,16 +2202,6 @@ export function App() {
                   onChange={(event) => updateDisplaySettings({ showClinicalConditions: event.target.checked })}
                 />
               </label>
-              <label className="settings-field">
-                <span>
-                  <strong>{t.requestMessageTitle}</strong>
-                  <small>{t.requestMessageHint}</small>
-                </span>
-                <textarea
-                  value={contributionRequestMessage}
-                  onChange={(event) => updateContributionRequestMessage(event.target.value)}
-                />
-              </label>
               {serverMode && serverRole === "admin" ? (
                 <ServerAccessSettingsPanel
                   settings={serverSettings}
@@ -2450,22 +2233,6 @@ export function App() {
         <section className="contributions-view">
           <header className="people-view-header">
             <h1>{t.contributionInbox}</h1>
-            <div className="view-actions">
-              <button type="button" onClick={() => contributionInputRef.current?.click()}>
-                <Upload size={17} />
-                <span>{t.importContribution}</span>
-              </button>
-              <input
-                ref={contributionInputRef}
-                type="file"
-                accept=".json,application/json"
-                hidden
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void importContributionFile(file);
-                }}
-              />
-            </div>
           </header>
           <div className="contribution-list">
             {pendingProjectChanges.map((change) => (
@@ -2510,84 +2277,13 @@ export function App() {
                 </p>
               </section>
             ))}
-            {pendingContributions.length === 0 && pendingProjectChanges.length === 0 ? (
+            {pendingProjectChanges.length === 0 ? (
               <section className="empty-state">
                 <Inbox size={34} />
                 <h2>{t.noContributions}</h2>
                 <p>{t.noContributionsHint}</p>
               </section>
-            ) : (
-              pendingContributions.map((contribution) => {
-                const targetPerson = project.people.find((person) => person.id === contribution.targetPersonId);
-
-                return (
-                  <section className="contribution-card" key={contribution.id}>
-                    <header>
-                      <div>
-                        <span className={`status-pill status-${contribution.status}`}>
-                          {t[`status_${contribution.status}`]}
-                        </span>
-                        <h2>{targetPerson ? fullName(targetPerson) : t.person}</h2>
-                        <p>
-                          {[contribution.contributorName, contribution.contributorEmail].filter(Boolean).join(" · ") ||
-                            t.unknownContributor}
-                        </p>
-                      </div>
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          title={t.acceptContribution}
-                          aria-label={t.acceptContribution}
-                          disabled={contribution.status !== "pending"}
-                          onClick={() => acceptContribution(contribution)}
-                        >
-                          <Check size={17} />
-                        </button>
-                        <button
-                          type="button"
-                          title={t.rejectContribution}
-                          aria-label={t.rejectContribution}
-                          disabled={contribution.status !== "pending"}
-                          onClick={() => rejectContribution(contribution)}
-                        >
-                          <X size={17} />
-                        </button>
-                      </div>
-                    </header>
-                    {contribution.source ? <ContributionSource source={contribution.source} t={t} /> : null}
-                    {contribution.comment ? <p className="contribution-comment">{contribution.comment}</p> : null}
-                    {targetPerson ? (
-                      <ContributionDiffTable
-                        title={t.person}
-                        person={targetPerson}
-                        patch={contribution.personPatch}
-                        contribution={contribution}
-                        t={t}
-                        onAcceptField={acceptContributionField}
-                        onRejectField={rejectContributionField}
-                      />
-                    ) : null}
-                    {contribution.relatedPatches?.map((relatedPatch) => {
-                      const relatedPerson = project.people.find((person) => person.id === relatedPatch.targetPersonId);
-                      if (!relatedPerson) return null;
-
-                      return (
-                        <ContributionDiffTable
-                          key={relatedPatch.targetPersonId}
-                          title={`${relatedPatch.relationshipLabel}: ${fullName(relatedPerson)}`}
-                          person={relatedPerson}
-                          patch={relatedPatch.personPatch}
-                          contribution={contribution}
-                          t={t}
-                          onAcceptField={acceptContributionField}
-                          onRejectField={rejectContributionField}
-                        />
-                      );
-                    })}
-                  </section>
-                );
-              })
-            )}
+            ) : null}
           </div>
         </section>
       )}
@@ -2628,7 +2324,9 @@ export function App() {
                     {!fullName(selectedPerson) ? <span className="person-name-token">{t.person}</span> : null}
                   </h2>
                   <p className="profile-life-line">
-                    <span>{getLifeStatus(selectedPerson, lifeLabels)}</span>
+                    <span className={isLifeStatusMissing(selectedPerson) ? "profile-missing-value" : undefined}>
+                      {getLifeStatus(selectedPerson, lifeLabels)}
+                    </span>
                     <span
                       className={`gender-symbol-badge gender-symbol-${selectedPerson.gender}`}
                       title={formatGender(selectedPerson.gender, t)}
@@ -2653,14 +2351,9 @@ export function App() {
               </div>
               <div className="modal-header-actions">
                 {!personModalEditing ? (
-                  <>
-                    <button type="button" title={t.editPerson} aria-label={t.editPerson} onClick={() => setPersonModalEditing(true)}>
-                      <Pencil size={16} />
-                    </button>
-                    <button type="button" title={t.requestInfo} aria-label={t.requestInfo} onClick={() => requestPersonInfo(selectedPerson)}>
-                      <Mail size={16} />
-                    </button>
-                  </>
+                  <button type="button" title={t.editPerson} aria-label={t.editPerson} onClick={() => setPersonModalEditing(true)}>
+                    <Pencil size={16} />
+                  </button>
                 ) : null}
                 <button type="button" title={t.close} aria-label={t.close} onClick={() => setPersonModalOpen(false)}>
                   <X size={17} />
@@ -2676,7 +2369,6 @@ export function App() {
                   setPersonModalEditing(false);
                   setPersonProfileTab("details");
                 }}
-                onRequestInfo={() => requestPersonInfo(selectedPerson)}
               />
             ) : (
               <PersonProfile
@@ -3193,6 +2885,7 @@ function PersonProfile({
                   <label key={relationship.id}>
                     <span>{fullName(partner) || t.person}</span>
                     <input
+                      className={relationship.startDate?.trim() ? "" : "missing"}
                       value={relationship.startDate ?? ""}
                       placeholder="DD/MM/AAAA"
                       onChange={(event) => onUpdateRelationshipStartDate(relationship.id, event.target.value)}
@@ -3756,15 +3449,18 @@ function ReadOnlyField({
   label,
   value,
   fallback,
-  warning
+  warning,
+  highlightMissing = true
 }: {
   label: string;
   value?: string;
   fallback: string;
   warning?: string;
+  highlightMissing?: boolean;
 }) {
+  const missing = highlightMissing && !value?.trim();
   return (
-    <div className={`readonly-field ${warning ? "warning" : ""}`} title={warning}>
+    <div className={`readonly-field ${warning ? "warning" : ""} ${missing ? "missing" : ""}`} title={warning}>
       <span>{label}</span>
       <strong>{value?.trim() || fallback}</strong>
       {warning ? <small>{warning}</small> : null}
@@ -3795,6 +3491,8 @@ function BirthSummaryField({
   const [famousBirth, setFamousBirth] = useState<FamousBirthMatch | null>(null);
   const [status, setStatus] = useState("");
   const summary = formatBirthSummary(person, birthPlace, fallback);
+  const missingFields = getMissingBirthSummaryFields(person, birthPlace, t);
+  const missing = missingFields.length > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -3807,9 +3505,9 @@ function BirthSummaryField({
       }
 
       const cacheKey = getFamousBirthCacheKey(birthDate.year, birthDate.month, birthDate.day);
-      if (cachedFamousBirth !== undefined) {
+      if (cachedFamousBirth) {
         setFamousBirth(cachedFamousBirth);
-        setStatus(cachedFamousBirth ? "" : t.noWorldHistory);
+        setStatus("");
         return;
       }
 
@@ -3835,9 +3533,10 @@ function BirthSummaryField({
   }, [birthDate?.day, birthDate?.month, cachedFamousBirth, onSaveFamousBirth, person.givenName, person.familyName, t]);
 
   return (
-    <div className={`readonly-field birth-summary-field ${warning ? "warning" : ""}`} title={warning}>
+    <div className={`readonly-field birth-summary-field ${warning ? "warning" : ""} ${missing ? "missing" : ""}`} title={warning}>
       <span>{label}</span>
       <strong>{summary}</strong>
+      {missing ? <small>{t.missingFields}: {missingFields.join(", ")}</small> : null}
       {birthDate ? (
         famousBirth ? (
           <small>
@@ -3980,6 +3679,23 @@ function getGenderSymbol(gender: Person["gender"]) {
   return "?";
 }
 
+function isLifeStatusMissing(person: Person) {
+  if (person.isDeceased || person.deathDate) {
+    return !person.deathDate?.trim();
+  }
+
+  return !person.birthDate?.trim();
+}
+
+function getMissingBirthSummaryFields(person: Person, birthPlace: { city: string; country: string }, t: Record<string, string>) {
+  return [
+    !person.birthDate?.trim() ? t.birthDate : "",
+    !person.birthTime?.trim() ? t.birthTime : "",
+    !(birthPlace.city || person.birthCity)?.trim() ? t.birthCity : "",
+    !(birthPlace.country || person.birthCountry)?.trim() ? t.birthCountry : ""
+  ].filter(Boolean);
+}
+
 function formatBirthDateTime(date?: string, time?: string) {
   return [date, time].map((part) => part?.trim()).filter(Boolean).join(" · ");
 }
@@ -4000,14 +3716,12 @@ function PersonEditor({
   person,
   t,
   onChange,
-  onSave,
-  onRequestInfo
+  onSave
 }: {
   person: Person;
   t: Record<string, string>;
   onChange: (patch: Partial<Person>) => void;
   onSave: () => void;
-  onRequestInfo: () => void;
 }) {
   const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
   const isDeceased = person.isDeceased ?? Boolean(person.deathDate);
@@ -4069,7 +3783,6 @@ function PersonEditor({
           <option value="unknown">{t.unknownGender}</option>
           <option value="female">{t.female}</option>
           <option value="male">{t.male}</option>
-          <option value="non_binary">{t.nonBinary}</option>
         </select>
       </label>
       <label>
@@ -4163,10 +3876,6 @@ function PersonEditor({
         </>
       ) : null}
       <div className="profile-actions">
-        <button className="secondary-action" type="button" onClick={onRequestInfo}>
-          <Mail size={17} />
-          <span>{t.requestInfo}</span>
-        </button>
         <button className="primary-action" type="button" onClick={onSave}>
           <Check size={17} />
           <span>{t.save}</span>
@@ -6447,9 +6156,9 @@ function BirthdayCalendarView({
       const key = `${saintDate.month}-${saintDate.day}`;
       const group = groups.get(key) ?? [];
       group.push({
+        ...saintDate,
         person,
-        name: fullName(person) || person.givenName || t.person,
-        ...saintDate
+        name: saintDate.name
       });
       groups.set(key, group);
     });
@@ -7446,9 +7155,17 @@ async function fetchMediamassBirthdayHtml(path: string, sourceUrl: string) {
 function parseMediamassFamousBirth(html: string, sourceUrl: string, currentPersonName: string): FamousBirthMatch | null {
   const document = new DOMParser().parseFromString(html, "text/html");
   const normalizedCurrentPersonName = normalizePlainText(currentPersonName);
-  const candidates = Array.from(document.querySelectorAll(".celebrityList .name a, .celebrityList .celebrity .name a"))
-    .map((element) => cleanFamousBirthName(element.textContent ?? ""))
-    .filter((candidate) => candidate && normalizePlainText(candidate) !== normalizedCurrentPersonName)
+  const candidates = [
+    ...Array.from(
+      document.querySelectorAll(
+        '.celebrityList .name a, .celebrityList .celebrity .name a, a[href*="/famosos/"], a[href*="/people/"]'
+      )
+    )
+      .map((element) => cleanFamousBirthName(element.textContent ?? "")),
+    ...extractFamousBirthNamesFromText(html)
+  ]
+    .filter((candidate) => isValidFamousBirthCandidate(candidate, normalizedCurrentPersonName))
+    .filter((candidate, index, all) => all.findIndex((item) => normalizePlainText(item) === normalizePlainText(candidate)) === index)
     .sort((first, second) => first.localeCompare(second, "es"));
 
   if (candidates[0]) return { name: candidates[0], sourceUrl };
@@ -7464,6 +7181,45 @@ function parseMediamassFamousBirth(html: string, sourceUrl: string, currentPerso
   }
 
   return null;
+}
+
+function extractFamousBirthNamesFromText(text: string) {
+  const candidates: string[] = [];
+  const linkPatterns = [
+    /\[([A-ZÁÉÍÓÚÜÑ][^\]\n]{2,80})\]\(https?:\/\/(?:www\.)?mediamass\.net\/(?:gente|people)\//g,
+    /https?:\/\/(?:www\.)?mediamass\.net\/(?:gente|people)\/[^\s)]+\/cumpleanos[^)\n]*\)?\s*([A-ZÁÉÍÓÚÜÑ][^\n]{2,80})/g
+  ];
+
+  linkPatterns.forEach((pattern) => {
+    for (const match of text.matchAll(pattern)) {
+      candidates.push(cleanFamousBirthName(match[1] ?? ""));
+    }
+  });
+
+  const sentencePatterns = [
+    /(?:famosos|celebridades|personajes)[^\n.]{0,120}(?:nacidos|nacidas)[^\n.]{0,80}:\s*([^\n.]+)/gi,
+    /(?:nacieron|nació)[^\n.]{0,120}(?:también|el mismo día)[^\n.]{0,80}:\s*([^\n.]+)/gi
+  ];
+
+  sentencePatterns.forEach((pattern) => {
+    for (const match of text.matchAll(pattern)) {
+      candidates.push(...(match[1] ?? "").split(/,|;| y /i).map(cleanFamousBirthName));
+    }
+  });
+
+  return candidates;
+}
+
+function isValidFamousBirthCandidate(candidate: string, normalizedCurrentPersonName: string) {
+  const normalized = normalizePlainText(candidate);
+  return (
+    candidate.length >= 3 &&
+    candidate.length <= 80 &&
+    normalized !== normalizedCurrentPersonName &&
+    !normalized.includes("cumpleanos") &&
+    !normalized.includes("mediamass") &&
+    !normalized.includes("google")
+  );
 }
 
 async function resolveSpanishWikipediaUrl(name: string) {
@@ -7770,7 +7526,25 @@ function getSaintDateForPerson(person: Person) {
   const firstName = person.givenName.trim().split(/\s+/)[0];
   if (!firstName) return null;
 
-  return saintDaysByName[normalizePlaceName(firstName)] ?? null;
+  const saintDay = saintDaysByName[normalizePlaceName(firstName)];
+  if (!saintDay) return null;
+
+  return {
+    ...saintDay,
+    name: saintDay.name ?? buildDefaultSaintName(firstName, person.gender)
+  };
+}
+
+function buildDefaultSaintName(name: string, gender?: Person["gender"]) {
+  const prefix = gender === "female" ? "Santa" : "San";
+  return `${prefix} ${capitalizeName(name)}`;
+}
+
+function capitalizeName(name: string) {
+  return name
+    .trim()
+    .toLocaleLowerCase("es")
+    .replace(/(^|\s|-)(\p{L})/gu, (_, separator: string, letter: string) => `${separator}${letter.toLocaleUpperCase("es")}`);
 }
 
 function uniqueIds(ids: string[]) {
@@ -7948,6 +7722,16 @@ async function enrichPublicInfoPreview(preview: PublicInfoPreview): Promise<Publ
   if (!url) return preview;
 
   try {
+    const proxiedMetadata = await fetchPublicMetadataPreview(url);
+    if (proxiedMetadata) {
+      return {
+        title: proxiedMetadata.title || preview.title || url,
+        url: proxiedMetadata.url || url,
+        snippet: proxiedMetadata.snippet || preview.snippet,
+        imageUrl: proxiedMetadata.imageUrl || preview.imageUrl || ""
+      };
+    }
+
     const html = await fetchPublicPageHtml(url);
     const metadata = parsePublicPageMetadata(html, url);
     return {
@@ -7964,6 +7748,22 @@ async function enrichPublicInfoPreview(preview: PublicInfoPreview): Promise<Publ
       url,
       imageUrl: preview.imageUrl || ""
     };
+  }
+}
+
+async function fetchPublicMetadataPreview(url: string): Promise<PublicInfoPreview | null> {
+  try {
+    const response = await fetch(`/public-metadata?url=${encodeURIComponent(url)}`);
+    if (!response.ok) return null;
+    const metadata = (await response.json()) as PublicInfoPreview;
+    return {
+      title: metadata.title ?? "",
+      url: metadata.url || url,
+      snippet: metadata.snippet ?? "",
+      imageUrl: metadata.imageUrl ?? ""
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -10706,25 +10506,25 @@ const autonomousCommunities: AutonomousCommunity[] = [
   }
 ];
 
-const saintDaysByName: Record<string, { day: number; month: number }> = {
+const saintDaysByName: Record<string, { day: number; month: number; name?: string }> = {
   adrian: { day: 8, month: 9 },
   agustin: { day: 28, month: 8 },
-  alberto: { day: 15, month: 11 },
+  alberto: { day: 15, month: 11, name: "San Alberto Magno" },
   alejandro: { day: 26, month: 2 },
   alejandra: { day: 20, month: 3 },
   alfonso: { day: 1, month: 8 },
   alicia: { day: 23, month: 6 },
-  almudena: { day: 9, month: 11 },
+  almudena: { day: 9, month: 11, name: "Nuestra Señora de la Almudena" },
   ana: { day: 26, month: 7 },
   andres: { day: 30, month: 11 },
   angel: { day: 2, month: 10 },
-  angeles: { day: 2, month: 8 },
+  angeles: { day: 2, month: 8, name: "Nuestra Señora de los Ángeles" },
   antonio: { day: 13, month: 6 },
   antonia: { day: 17, month: 1 },
   beatriz: { day: 29, month: 7 },
   blanca: { day: 5, month: 8 },
   carlos: { day: 4, month: 11 },
-  carmen: { day: 16, month: 7 },
+  carmen: { day: 16, month: 7, name: "Nuestra Señora del Carmen" },
   catalina: { day: 25, month: 11 },
   cristina: { day: 24, month: 7 },
   daniel: { day: 21, month: 7 },
@@ -10752,7 +10552,7 @@ const saintDaysByName: Record<string, { day: number; month: number }> = {
   irene: { day: 5, month: 4 },
   isabel: { day: 5, month: 11 },
   javier: { day: 3, month: 12 },
-  jesus: { day: 3, month: 1 },
+  jesus: { day: 3, month: 1, name: "Santísimo Nombre de Jesús" },
   joaquin: { day: 26, month: 7 },
   jorge: { day: 23, month: 4 },
   jose: { day: 19, month: 3 },
@@ -10765,12 +10565,12 @@ const saintDaysByName: Record<string, { day: number; month: number }> = {
   lucia: { day: 13, month: 12 },
   luis: { day: 21, month: 6 },
   luisa: { day: 15, month: 3 },
-  manuel: { day: 1, month: 1 },
-  manuela: { day: 1, month: 1 },
+  manuel: { day: 1, month: 1, name: "San Manuel" },
+  manuela: { day: 1, month: 1, name: "Santa Manuela" },
   marcelo: { day: 16, month: 1 },
   marcos: { day: 25, month: 4 },
   margarita: { day: 16, month: 11 },
-  maria: { day: 12, month: 9 },
+  maria: { day: 12, month: 9, name: "Santo Nombre de María" },
   mariano: { day: 19, month: 8 },
   marina: { day: 18, month: 7 },
   mario: { day: 19, month: 1 },
@@ -10785,13 +10585,13 @@ const saintDaysByName: Record<string, { day: number; month: number }> = {
   pablo: { day: 29, month: 6 },
   patricio: { day: 17, month: 3 },
   pedro: { day: 29, month: 6 },
-  pilar: { day: 12, month: 10 },
+  pilar: { day: 12, month: 10, name: "Nuestra Señora del Pilar" },
   rafael: { day: 29, month: 9 },
   ramon: { day: 31, month: 8 },
   raul: { day: 30, month: 12 },
-  rocio: { day: 8, month: 9 },
+  rocio: { day: 8, month: 9, name: "Nuestra Señora del Rocío" },
   rosa: { day: 23, month: 8 },
-  rosario: { day: 7, month: 10 },
+  rosario: { day: 7, month: 10, name: "Nuestra Señora del Rosario" },
   ruben: { day: 4, month: 8 },
   salvador: { day: 6, month: 8 },
   santiago: { day: 25, month: 7 },
@@ -11152,7 +10952,6 @@ function buildContributionRequestHtml({
           <option value="unknown">${escapeHtml(labels.unknown)}</option>
           <option value="female">${escapeHtml(labels.female)}</option>
           <option value="male">${escapeHtml(labels.male)}</option>
-          <option value="non_binary">${escapeHtml(labels.nonBinary)}</option>
         </select>
       </label>
       <div class="grid">
@@ -11248,7 +11047,6 @@ function buildContributionPersonFields(labels: Record<string, string>, prefix: s
           <option value="unknown">${escapeHtml(labels.unknown)}</option>
           <option value="female">${escapeHtml(labels.female)}</option>
           <option value="male">${escapeHtml(labels.male)}</option>
-          <option value="non_binary">${escapeHtml(labels.nonBinary)}</option>
         </select>
       </label>
       <div class="grid">

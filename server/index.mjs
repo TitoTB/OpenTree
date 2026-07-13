@@ -124,7 +124,6 @@ function sanitizeGuestProject(proposedProject, currentProject) {
     relationships: proposedRelationships,
     galleryPhotos: proposedPhotos,
     displaySettings: currentProject.displaySettings,
-    contributionRequestMessage: currentProject.contributionRequestMessage,
     surnameProfiles: currentProject.surnameProfiles,
     nameProfiles: currentProject.nameProfiles,
     clinicalConditions: currentProject.clinicalConditions,
@@ -342,6 +341,155 @@ async function handleApi(request, response, pathname) {
   return sendJson(response, 404, { error: "NOT_FOUND" });
 }
 
+async function handleMediamassProxy(request, response, pathname) {
+  if (request.method !== "GET") {
+    response.writeHead(405, { Allow: "GET" });
+    response.end();
+    return;
+  }
+
+  const mediamassPath = pathname.replace(/^\/mediamass-api/, "") || "/";
+  if (!mediamassPath.startsWith("/cumpleanos/")) {
+    return sendJson(response, 400, { error: "INVALID_MEDIAMASS_PATH" });
+  }
+
+  const targetUrl = `https://es.mediamass.net${mediamassPath}`;
+  const proxyResponse = await fetch(targetUrl, {
+    headers: {
+      "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+      Accept: "text/html,application/xhtml+xml"
+    }
+  });
+
+  if (!proxyResponse.ok) {
+    return sendJson(response, proxyResponse.status, { error: "MEDIAMASS_PROXY_ERROR" });
+  }
+
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "public, max-age=86400"
+  });
+  response.end(await proxyResponse.text());
+}
+
+async function handlePublicMetadataProxy(request, response, searchParams) {
+  if (request.method !== "GET") {
+    response.writeHead(405, { Allow: "GET" });
+    response.end();
+    return;
+  }
+
+  const targetUrl = normalizePublicMetadataUrl(searchParams.get("url") || "");
+  if (!targetUrl) {
+    return sendJson(response, 400, { error: "INVALID_PUBLIC_METADATA_URL" });
+  }
+
+  const proxyResponse = await fetch(targetUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+      Accept: "text/html,application/xhtml+xml"
+    }
+  });
+
+  if (!proxyResponse.ok) {
+    return sendJson(response, proxyResponse.status, { error: "PUBLIC_METADATA_ERROR" });
+  }
+
+  const contentType = proxyResponse.headers.get("content-type") || "";
+  if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
+    return sendJson(response, 415, { error: "PUBLIC_METADATA_UNSUPPORTED_CONTENT" });
+  }
+
+  const html = await proxyResponse.text();
+  return sendJson(response, 200, parsePublicMetadata(html, proxyResponse.url || targetUrl));
+}
+
+function normalizePublicMetadataUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function parsePublicMetadata(html, sourceUrl) {
+  const title =
+    readHtmlMeta(html, "property", "og:title") ||
+    readHtmlMeta(html, "name", "twitter:title") ||
+    readHtmlTitle(html) ||
+    readHtmlFirstHeading(html);
+  const snippet =
+    readHtmlMeta(html, "property", "og:description") ||
+    readHtmlMeta(html, "name", "twitter:description") ||
+    readHtmlMeta(html, "name", "description");
+  const imageUrl =
+    readHtmlMeta(html, "property", "og:image") ||
+    readHtmlMeta(html, "property", "og:image:secure_url") ||
+    readHtmlMeta(html, "name", "twitter:image") ||
+    readHtmlMeta(html, "name", "twitter:image:src") ||
+    readHtmlFirstImage(html);
+
+  return {
+    title: cleanHtmlText(title),
+    url: sourceUrl,
+    snippet: cleanHtmlText(snippet),
+    imageUrl: resolvePublicMetadataAssetUrl(imageUrl, sourceUrl)
+  };
+}
+
+function readHtmlMeta(html, attribute, value) {
+  const pattern = new RegExp(`<meta\\b[^>]*\\b${attribute}=["']${escapeRegExp(value)}["'][^>]*>`, "i");
+  const match = html.match(pattern);
+  return match ? readHtmlAttribute(match[0], "content") : "";
+}
+
+function readHtmlTitle(html) {
+  return html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "";
+}
+
+function readHtmlFirstHeading(html) {
+  return html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || "";
+}
+
+function readHtmlFirstImage(html) {
+  const match = html.match(/<img\b[^>]*>/i);
+  return match ? readHtmlAttribute(match[0], "src") : "";
+}
+
+function readHtmlAttribute(tag, attribute) {
+  return tag.match(new RegExp(`\\b${attribute}=["']([^"']+)["']`, "i"))?.[1] || "";
+}
+
+function resolvePublicMetadataAssetUrl(assetUrl, sourceUrl) {
+  if (!assetUrl) return "";
+  try {
+    return new URL(assetUrl, sourceUrl).href;
+  } catch {
+    return assetUrl;
+  }
+}
+
+function cleanHtmlText(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function serveStatic(request, response, pathname) {
   const requestedPath = pathname === "/" ? "/index.html" : pathname;
   const filePath = normalize(resolve(distDir, `.${decodeURIComponent(requestedPath)}`));
@@ -372,6 +520,14 @@ createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
       await handleApi(request, response, url.pathname);
+      return;
+    }
+    if (url.pathname.startsWith("/mediamass-api/")) {
+      await handleMediamassProxy(request, response, url.pathname);
+      return;
+    }
+    if (url.pathname === "/public-metadata") {
+      await handlePublicMetadataProxy(request, response, url.searchParams);
       return;
     }
     serveStatic(request, response, url.pathname);
