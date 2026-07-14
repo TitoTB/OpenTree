@@ -30,7 +30,6 @@ import {
   RefreshCw,
   Route,
   Search,
-  Star,
   SquareArrowOutUpRight,
   SlidersHorizontal,
   Sun,
@@ -79,9 +78,28 @@ import type {
 } from "./domain/types";
 
 type WizardStep = "owner" | "parents";
-type PersonProfileTab = "details" | "clinical" | "public" | "stars";
+type PersonProfileTab = "details" | "clinical" | "public";
 type SettingsTab = "personalization" | "conditions" | "access";
 type PublicInfoPreview = Pick<PublicInfoLink, "title" | "url" | "snippet" | "imageUrl">;
+type AncestorSearchSourceId = "pares" | "familysearch" | "largo-caballero";
+type AncestorSearchStatus = "idle" | "loading" | "done" | "error";
+
+interface AncestorSearchQuery {
+  personId: string;
+  name: string;
+  birthYear?: number;
+  birthPlace?: string;
+}
+
+interface AncestorSearchResult {
+  personId?: string;
+  personName: string;
+  title: string;
+  url: string;
+  snippet?: string;
+  verified: boolean;
+}
+
 type MainView =
   | "tree"
   | "ancestors"
@@ -355,13 +373,6 @@ export function App() {
     setSelectedId(person.id);
     setPersonModalEditing(false);
     setPersonProfileTab("details");
-    setPersonModalOpen(true);
-  }
-
-  function selectPersonStarMap(person: Person) {
-    setSelectedId(person.id);
-    setPersonModalEditing(false);
-    setPersonProfileTab("stars");
     setPersonModalOpen(true);
   }
 
@@ -1994,7 +2005,7 @@ export function App() {
           </div>
         </section>
       ) : activeView === "ancestors" ? (
-        <AncestorsView t={t} onBack={showTreeView} />
+        <AncestorsView people={project.people} relationships={project.relationships} t={t} onBack={showTreeView} />
       ) : activeView === "people" ? (
         <section className="people-view">
           <header className="people-view-header">
@@ -2093,7 +2104,6 @@ export function App() {
           initialMode={initialCalendarMode}
           showSaintDays={displaySettings.showSaintDays}
           onSelect={selectPerson}
-          onOpenStarMap={selectPersonStarMap}
           onSaveWorldHistoryEvents={saveWorldHistoryEvents}
         />
       ) : activeView === "gallery" ? (
@@ -2455,7 +2465,6 @@ export function App() {
                 lifeLabels={lifeLabels}
                 t={t}
                 onTabChange={setPersonProfileTab}
-                onEdit={() => setPersonModalEditing(true)}
                 onOpenSurname={openSurnameDetail}
                 onOpenGivenName={openGivenNameDetail}
                 onLinkClinicalCondition={linkClinicalConditionToSelectedPerson}
@@ -2525,8 +2534,23 @@ export function App() {
   );
 }
 
-function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () => void }) {
-  const ancestorSources = [
+function AncestorsView({
+  people,
+  relationships,
+  t,
+  onBack
+}: {
+  people: Person[];
+  relationships: Relationship[];
+  t: Record<string, string>;
+  onBack: () => void;
+}) {
+  const [searchStatus, setSearchStatus] = useState<AncestorSearchStatus>("idle");
+  const [activeSearchSource, setActiveSearchSource] = useState<AncestorSearchSourceId | null>(null);
+  const [searchResults, setSearchResults] = useState<AncestorSearchResult[]>([]);
+  const [searchedPeople, setSearchedPeople] = useState<AncestorSearchQuery[]>([]);
+  const [searchError, setSearchError] = useState("");
+  const certificateSources = [
     {
       title: t.literalBirthCertificate,
       description: t.literalBirthCertificateDescription,
@@ -2543,6 +2567,59 @@ function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () =>
       url: "https://sede.mjusticia.gob.es/tramites/certificado-matrimonio"
     }
   ];
+  const searchableSources: Array<{
+    id: AncestorSearchSourceId;
+    title: string;
+    description: string;
+    url: string;
+  }> = [
+    {
+      id: "pares",
+      title: "Portal de Archivos Españoles (PARES)",
+      description: t.paresDescription,
+      url: "https://pares.cultura.gob.es/inicio.html"
+    },
+    {
+      id: "familysearch",
+      title: "FamilySearch",
+      description: t.familySearchDescription,
+      url: "https://www.familysearch.org/es/global"
+    },
+    {
+      id: "largo-caballero",
+      title: "Fundación Francisco Largo Caballero",
+      description: t.largoCaballeroDescription,
+      url: "https://censorepresaliadosugt.es/s/public/faceted-browse/1"
+    }
+  ];
+  const activeSource = searchableSources.find((source) => source.id === activeSearchSource) ?? null;
+
+  async function consultSource(sourceId: AncestorSearchSourceId) {
+    const queries = buildAncestorSearchQueries(people, relationships);
+    const source = searchableSources.find((candidate) => candidate.id === sourceId) ?? null;
+    setActiveSearchSource(sourceId);
+    setSearchedPeople(queries);
+    setSearchResults([]);
+    setSearchError("");
+    setSearchStatus("loading");
+
+    try {
+      const response = await fetch("/api/ancestor-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId, queries })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as { results?: AncestorSearchResult[]; searched?: AncestorSearchQuery[] };
+      setSearchResults(payload.results ?? []);
+      setSearchedPeople(payload.searched ?? queries);
+      setSearchStatus("done");
+    } catch (error) {
+      console.error(error);
+      setSearchError(source ? `${t.ancestorSearchError} ${source.url}` : t.ancestorSearchError);
+      setSearchStatus("error");
+    }
+  }
 
   return (
     <section className="ancestors-view">
@@ -2554,7 +2631,7 @@ function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () =>
         </button>
       </header>
       <div className="ancestor-source-grid">
-        {ancestorSources.map((source) => (
+        {certificateSources.map((source) => (
           <a className="ancestor-source-card" href={source.url} target="_blank" rel="noreferrer" key={source.url}>
             <div>
               <span className="eyebrow">{t.officialSource}</span>
@@ -2571,9 +2648,157 @@ function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () =>
             </span>
           </a>
         ))}
+        {searchableSources.map((source) => (
+          <article className="ancestor-source-card" key={source.id}>
+            <div>
+              <span className="eyebrow">{t.ancestorSearchSource}</span>
+              <h2>{source.title}</h2>
+            </div>
+            <div className="ancestor-source-badges" aria-hidden="true">
+              <span>{t.free}</span>
+              <span>{t.online}</span>
+            </div>
+            <p>{source.description}</p>
+            <div className="ancestor-source-actions">
+              <a className="secondary-action compact-action" href={source.url} target="_blank" rel="noreferrer">
+                <SquareArrowOutUpRight size={16} />
+                <span>{t.openSource}</span>
+              </a>
+              <button
+                className="primary-action compact-action"
+                type="button"
+                onClick={() => void consultSource(source.id)}
+              >
+                <Search size={16} />
+                <span>{t.consult}</span>
+              </button>
+            </div>
+          </article>
+        ))}
       </div>
+      {activeSource ? (
+        <AncestorSearchModal
+          source={activeSource}
+          status={searchStatus}
+          results={searchResults}
+          searchedPeople={searchedPeople}
+          error={searchError}
+          t={t}
+          onClose={() => {
+            setActiveSearchSource(null);
+            setSearchStatus("idle");
+          }}
+        />
+      ) : null}
     </section>
   );
+}
+
+function AncestorSearchModal({
+  source,
+  status,
+  results,
+  searchedPeople,
+  error,
+  t,
+  onClose
+}: {
+  source: { title: string; url: string };
+  status: AncestorSearchStatus;
+  results: AncestorSearchResult[];
+  searchedPeople: AncestorSearchQuery[];
+  error: string;
+  t: Record<string, string>;
+  onClose: () => void;
+}) {
+  const hasResults = results.length > 0;
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="person-modal ancestor-search-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ancestor-search-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="modal-header">
+          <div>
+            <span className="eyebrow">{t.ancestorSearchResults}</span>
+            <h2 id="ancestor-search-title">{source.title}</h2>
+          </div>
+          <button type="button" title={t.close} aria-label={t.close} onClick={onClose}>
+            <X size={20} />
+          </button>
+        </header>
+        {status === "loading" ? <p className="ancestor-search-message">{t.ancestorSearchSearching}</p> : null}
+        {status === "error" ? <p className="ancestor-search-message">{error || t.ancestorSearchError}</p> : null}
+        {status === "done" && !hasResults ? (
+          <p className="ancestor-search-message">{t.ancestorSearchNoResults}</p>
+        ) : null}
+        {hasResults ? (
+          <div className="ancestor-result-list">
+            {results.map((result) => (
+              <a
+                className="public-preview-card ancestor-result-card"
+                href={result.url}
+                target="_blank"
+                rel="noreferrer"
+                key={`${result.url}-${result.personId ?? result.personName}`}
+              >
+                <div>
+                  <strong>{result.title}</strong>
+                  <p>{result.snippet || result.personName}</p>
+                  <small>{result.personName}</small>
+                </div>
+                <SquareArrowOutUpRight size={18} />
+              </a>
+            ))}
+          </div>
+        ) : null}
+        <div className="ancestor-search-foot">
+          <a className="secondary-action compact-action" href={source.url} target="_blank" rel="noreferrer">
+            <SquareArrowOutUpRight size={16} />
+            <span>{t.openSource}</span>
+          </a>
+          {searchedPeople.length > 0 ? (
+            <small>
+              {t.searchedPeople}: {searchedPeople.map((query) => query.name).join(", ")}
+            </small>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function buildAncestorSearchQueries(people: Person[], relationships: Relationship[]): AncestorSearchQuery[] {
+  type RankedAncestorSearchQuery = AncestorSearchQuery & { birthYear: number | undefined; birthPlace: string; hasParents: boolean };
+  const parentLinks = relationships.filter((relationship) => relationship.kind === "parent_child");
+  const childIdsWithParents = new Set(parentLinks.map((relationship) => relationship.toPersonId));
+  return people
+    .map((person): RankedAncestorSearchQuery | null => {
+      const name = fullName(person).trim();
+      if (!name) return null;
+      const birthDate = parseFullDateParts(person.birthDate);
+      const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
+      return {
+        personId: person.id,
+        name,
+        birthYear: birthDate?.year,
+        birthPlace: [birthPlace.city || person.birthCity, birthPlace.country || person.birthCountry].filter(Boolean).join(", "),
+        hasParents: childIdsWithParents.has(person.id)
+      };
+    })
+    .filter(
+      (query): query is RankedAncestorSearchQuery =>
+        query !== null && query.name.split(/\s+/).length >= 2
+    )
+    .sort((first, second) => {
+      if (first.hasParents !== second.hasParents) return first.hasParents ? 1 : -1;
+      return (first.birthYear ?? 9999) - (second.birthYear ?? 9999) || first.name.localeCompare(second.name, "es");
+    })
+    .slice(0, 12)
+    .map(({ hasParents: _hasParents, ...query }) => query);
 }
 
 function getPartnerRelationshipsForPerson(personId: string, people: Person[], relationships: Relationship[]) {
@@ -2856,7 +3081,6 @@ function PersonProfile({
   lifeLabels,
   t,
   onTabChange,
-  onEdit,
   onOpenSurname,
   onOpenGivenName,
   onLinkClinicalCondition,
@@ -2882,7 +3106,6 @@ function PersonProfile({
   lifeLabels: LifeLabels;
   t: Record<string, string>;
   onTabChange: (tab: PersonProfileTab) => void;
-  onEdit: () => void;
   onOpenSurname: (surname: string) => void;
   onOpenGivenName: (name: string) => void;
   onLinkClinicalCondition: (conditionName: string) => void;
@@ -2935,14 +3158,6 @@ function PersonProfile({
         >
           <Search size={14} />
           <span>{t.publicInfo}</span>
-        </button>
-        <button
-          className={activeTab === "stars" ? "active" : ""}
-          type="button"
-          onClick={() => onTabChange("stars")}
-        >
-          <Star size={14} />
-          <span>{t.starMap}</span>
         </button>
       </div>
       {activeTab === "details" ? (
@@ -3008,7 +3223,7 @@ function PersonProfile({
           onEnrichClinicalCondition={onEnrichClinicalCondition}
           onOpenConditionCatalog={onOpenConditionCatalog}
         />
-      ) : activeTab === "public" ? (
+      ) : (
         <PublicInfoPanel
           person={person}
           t={t}
@@ -3016,8 +3231,6 @@ function PersonProfile({
           onUpdatePublicInfoLink={onUpdatePublicInfoLink}
           onRejectPublicInfoLink={onRejectPublicInfoLink}
         />
-      ) : (
-        <StarMapPanel person={person} t={t} onEdit={onEdit} />
       )}
     </div>
   );
@@ -6339,7 +6552,6 @@ function BirthdayCalendarView({
   initialMode,
   showSaintDays,
   onSelect,
-  onOpenStarMap,
   onSaveWorldHistoryEvents
 }: {
   people: Person[];
@@ -6351,7 +6563,6 @@ function BirthdayCalendarView({
   initialMode: "calendar" | "history";
   showSaintDays: boolean;
   onSelect: (person: Person) => void;
-  onOpenStarMap: (person: Person) => void;
   onSaveWorldHistoryEvents: (cacheKey: string, entries: WorldHistoryEntry[]) => void;
 }) {
   const currentYear = new Date().getFullYear();
@@ -6514,9 +6725,7 @@ function BirthdayCalendarView({
                       type="button"
                       title={dayTitle}
                       aria-label={dayTitle}
-                      onClick={() =>
-                        firstBirthdayPerson ? onOpenStarMap(firstBirthdayPerson) : onSelect(firstSelectablePerson)
-                      }
+                      onClick={() => onSelect(firstBirthdayPerson ?? firstSelectablePerson)}
                     >
                       <strong>{day}</strong>
                     </button>

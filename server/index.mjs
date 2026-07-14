@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -98,7 +98,9 @@ function readJson(path, fallback) {
 }
 
 function writeJson(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tempPath = `${path}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  renameSync(tempPath, path);
 }
 
 function loadConfig() {
@@ -600,6 +602,17 @@ async function handleApi(request, response, pathname) {
     return sendJson(response, 401, { error: "AUTH_REQUIRED" });
   }
 
+  if (request.method === "POST" && pathname === "/api/ancestor-search") {
+    const body = await readBody(request);
+    const sourceId = String(body.sourceId || "");
+    const queries = Array.isArray(body.queries) ? body.queries : [];
+    if (!["pares", "familysearch", "largo-caballero"].includes(sourceId)) {
+      return sendJson(response, 400, { error: "INVALID_ANCESTOR_SOURCE" });
+    }
+    const result = await searchAncestorSource(sourceId, queries);
+    return sendJson(response, 200, result);
+  }
+
   if (request.method === "PUT" && pathname === "/api/project") {
     const body = await readBody(request);
     const proposedProject = body.project;
@@ -860,6 +873,159 @@ async function handlePublicImageProxy(request, response, searchParams) {
     "Cache-Control": "public, max-age=604800, immutable"
   });
   response.end(request.method === "HEAD" ? undefined : body);
+}
+
+async function searchAncestorSource(sourceId, rawQueries) {
+  const queries = rawQueries
+    .map(normalizeAncestorQuery)
+    .filter((query) => query.name)
+    .slice(0, 12);
+  const sourceConfig = ancestorSourceConfigs[sourceId];
+  if (!sourceConfig || queries.length === 0) {
+    return { sourceId, searched: queries, results: [] };
+  }
+
+  const results = [];
+  for (const query of queries) {
+    const targetUrl = sourceConfig.buildUrl(query);
+    const result = await probeAncestorResult(sourceConfig, query, targetUrl);
+    if (result) results.push(result);
+    if (results.length >= 8) break;
+  }
+
+  return { sourceId, searched: queries, results };
+}
+
+const ancestorSourceConfigs = {
+  pares: {
+    sourceName: "PARES",
+    buildUrl: (query) => {
+      const searchText = [query.name, query.birthYear, query.birthPlace].filter(Boolean).join(" ");
+      return `https://pares.cultura.gob.es/ParesBusquedas20/catalogo/search?nm=${encodeURIComponent(searchText)}`;
+    },
+    negativePatterns: [/no se han encontrado/i, /sin resultados/i],
+    positivePatterns: [/PARES/i, /Archivo/i, /cat[aá]logo/i]
+  },
+  familysearch: {
+    sourceName: "FamilySearch",
+    buildUrl: (query) => {
+      const { givenName, surname } = splitSearchName(query.name);
+      const params = new URLSearchParams();
+      if (givenName) params.set("q.givenName", givenName);
+      if (surname) params.set("q.surname", surname);
+      if (query.birthYear) {
+        params.set("q.birthLikeDate.from", String(Math.max(0, Number(query.birthYear) - 2)));
+        params.set("q.birthLikeDate.to", String(Number(query.birthYear) + 2));
+      }
+      if (query.birthPlace) params.set("q.birthLikePlace", query.birthPlace);
+      return `https://www.familysearch.org/es/search/record/results?${params.toString()}`;
+    },
+    negativePatterns: [/no results/i, /sin resultados/i, /no se encontraron/i],
+    positivePatterns: [/Search Results/i, /Resultados/i, /record/i, /registro/i]
+  },
+  "largo-caballero": {
+    sourceName: "Fundación Francisco Largo Caballero",
+    buildUrl: (query) =>
+      `https://censorepresaliadosugt.es/s/public/index/search?fulltext_search=${encodeURIComponent(query.name)}`,
+    negativePatterns: [/no results/i, /sin resultados/i, /no se encontraron/i],
+    positivePatterns: [/item/i, /represaliad/i, /UGT/i, /Largo Caballero/i]
+  }
+};
+
+function normalizeAncestorQuery(query) {
+  return {
+    personId: String(query?.personId || ""),
+    name: cleanHtmlText(String(query?.name || "")).slice(0, 120),
+    birthYear: Number.isFinite(Number(query?.birthYear)) ? Number(query.birthYear) : undefined,
+    birthPlace: cleanHtmlText(String(query?.birthPlace || "")).slice(0, 160)
+  };
+}
+
+function splitSearchName(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length <= 1) return { givenName: parts[0] || "", surname: "" };
+  return {
+    givenName: parts.slice(0, Math.max(1, parts.length - 2)).join(" "),
+    surname: parts.slice(-2).join(" ")
+  };
+}
+
+async function probeAncestorResult(sourceConfig, query, targetUrl) {
+  try {
+    const html = await fetchAncestorHtml(targetUrl);
+    const text = cleanHtmlText(html);
+    const normalizedText = normalizeSearchText(text);
+    const normalizedName = normalizeSearchText(query.name);
+    const hasName = normalizedName
+      .split(" ")
+      .filter((part) => part.length > 2)
+      .every((part) => normalizedText.includes(part));
+    const hasNegativeSignal = sourceConfig.negativePatterns.some((pattern) => pattern.test(text));
+    const hasPositiveSignal = sourceConfig.positivePatterns.some((pattern) => pattern.test(text));
+    if (!hasName || hasNegativeSignal || !hasPositiveSignal) return null;
+
+    return {
+      personId: query.personId,
+      personName: query.name,
+      title: readHtmlTitle(html) || `${sourceConfig.sourceName}: ${query.name}`,
+      url: targetUrl,
+      snippet: buildAncestorSnippet(text, query.name),
+      verified: true
+    };
+  } catch (error) {
+    console.warn(`Ancestor source ${sourceConfig.sourceName} could not be queried`, error?.message || error);
+    return null;
+  }
+}
+
+async function fetchAncestorHtml(targetUrl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+  try {
+    let response = await fetch(targetUrl, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+        Accept: "text/html,application/xhtml+xml,text/plain,*/*"
+      }
+    });
+    if (!response.ok) {
+      response = await fetch(`https://r.jina.ai/http://${targetUrl.replace(/^https?:\/\//, "")}`, {
+        redirect: "follow",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+          Accept: "text/plain,text/markdown,text/html,*/*"
+        }
+      });
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ñ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildAncestorSnippet(text, name) {
+  const normalizedText = normalizeSearchText(text);
+  const normalizedName = normalizeSearchText(name).split(" ")[0] || "";
+  const index = normalizedName ? normalizedText.indexOf(normalizedName) : -1;
+  if (index < 0) return text.slice(0, 220);
+  return text.slice(Math.max(0, index - 80), index + 240).trim();
 }
 
 function normalizePublicMetadataUrl(value) {

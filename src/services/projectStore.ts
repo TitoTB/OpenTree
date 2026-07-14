@@ -47,6 +47,8 @@ type ProjectSyncDetail = {
 
 let serverMode = false;
 let serverRole: ServerRole | null = null;
+let queuedServerProject: TreeProject | null = null;
+let serverSaveRunning = false;
 
 export function loadProject(): TreeProject | null {
   const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -133,7 +135,7 @@ export function saveProject(project: TreeProject) {
   const projectWithoutDocuments = stripPersonDocuments(project);
 
   if (serverMode) {
-    void saveProjectToServer(projectWithoutDocuments);
+    queueProjectSaveToServer(projectWithoutDocuments);
     return true;
   }
 
@@ -192,6 +194,29 @@ export function addProjectSyncListener(listener: (detail: ProjectSyncDetail) => 
   const handler = (event: Event) => listener((event as CustomEvent<ProjectSyncDetail>).detail);
   window.addEventListener("opentree:project-sync", handler);
   return () => window.removeEventListener("opentree:project-sync", handler);
+}
+
+function queueProjectSaveToServer(project: TreeProject) {
+  queuedServerProject = { ...stripPersonDocuments(project), updatedAt: new Date().toISOString() };
+  if (!serverSaveRunning) {
+    void flushProjectSaveQueue();
+  }
+}
+
+async function flushProjectSaveQueue() {
+  serverSaveRunning = true;
+  try {
+    while (queuedServerProject) {
+      const nextProject = queuedServerProject;
+      queuedServerProject = null;
+      await saveProjectToServer(nextProject);
+    }
+  } finally {
+    serverSaveRunning = false;
+    if (queuedServerProject) {
+      void flushProjectSaveQueue();
+    }
+  }
 }
 
 async function saveProjectToServer(project: TreeProject) {

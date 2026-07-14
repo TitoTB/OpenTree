@@ -3749,6 +3749,49 @@ button.zodiac-badge:hover {
   font-weight: 900;
 }
 
+.ancestor-source-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.ancestor-search-modal {
+  width: min(860px, calc(100vw - 48px));
+}
+
+.ancestor-search-message {
+  padding: 16px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(224, 244, 241, 0.54);
+  border: 1px solid var(--line);
+  font-weight: 800;
+}
+
+.ancestor-result-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ancestor-result-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  text-decoration: none;
+}
+
+.ancestor-search-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .compact-action {
   width: auto;
 }
@@ -6186,10 +6229,12 @@ button.calendar-day {
   position: absolute;
   left: -74px;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   min-width: 54px;
-  height: 24px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 4px 8px;
   border-radius: 999px;
   color: #075f58;
   background: rgba(255, 255, 255, 0.92);
@@ -6202,10 +6247,27 @@ button.calendar-day {
   white-space: nowrap;
 }
 
+.tree-generation-labels span strong,
+.tree-generation-labels span small {
+  display: block;
+  line-height: 1;
+}
+
+.tree-generation-labels span small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 900;
+}
+
 .tree-style-medieval .tree-generation-labels span {
   color: #4a2a17;
   background: rgba(255, 236, 188, 0.84);
   border-color: rgba(91, 50, 24, 0.18);
+}
+
+.tree-style-medieval .tree-generation-labels span small {
+  color: #7a5637;
 }
 
 .tree-style-epic .tree-generation-labels span {
@@ -6214,10 +6276,18 @@ button.calendar-day {
   border-color: rgba(202, 156, 82, 0.2);
 }
 
+.tree-style-epic .tree-generation-labels span small {
+  color: #d0a45d;
+}
+
 .tree-style-japanese .tree-generation-labels span {
   color: #963b53;
   background: rgba(255, 250, 247, 0.86);
   border-color: rgba(184, 79, 102, 0.2);
+}
+
+.tree-style-japanese .tree-generation-labels span small {
+  color: #b84f66;
 }
 
 .tree-forest {
@@ -6226,7 +6296,7 @@ button.calendar-day {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 72px;
+  gap: 40px;
   min-width: max-content;
 }
 
@@ -6255,6 +6325,14 @@ button.calendar-day {
 .couple-row > * {
   position: relative;
   z-index: 1;
+}
+
+.couple-balance-spacer {
+  flex: 0 0 calc(var(--partner-spacer-count, 1) * 302px);
+  width: calc(var(--partner-spacer-count, 1) * 302px);
+  height: 1px;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .couple-partner {
@@ -6392,7 +6470,7 @@ button.calendar-day {
 }
 
 .children-row {
-  --sibling-gap: 22px;
+  --sibling-gap: 12px;
   position: relative;
   display: flex;
   justify-content: center;

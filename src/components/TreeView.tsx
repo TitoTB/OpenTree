@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { Plus } from "lucide-react";
 import type { ClinicalCondition, ClinicalConditionCategory, DisplaySettings, Person, Relationship } from "../domain/types";
 import { comparePeopleByBirthDate } from "../tree/layout";
@@ -15,6 +16,7 @@ type TreeConnector = {
 type GenerationGuide = {
   y: number;
   label: string;
+  startYear?: number;
 };
 
 type BranchSide = "left" | "right";
@@ -201,10 +203,12 @@ export function TreeView({
         height: Math.max(1, Math.ceil(stage.scrollHeight))
       });
       setConnectors(nextConnectors);
+      const generationYs = getUniqueGenerationYs(nextGenerationYs);
       setGenerationGuides(
-        getUniqueGenerationYs(nextGenerationYs).map((y, index) => ({
+        generationYs.map((y, index) => ({
           y,
-          label: `${index + 1} GEN`
+          label: `${index + 1} GEN`,
+          startYear: getGenerationStartYear(stage, stageRect, generationYs, y, toLocalY)
         }))
       );
     };
@@ -247,7 +251,8 @@ export function TreeView({
         <div className="tree-generation-labels" aria-hidden="true">
           {generationGuides.map((guide) => (
             <span key={`${guide.label}-${guide.y}`} style={{ top: `${guide.y}px` }}>
-              {guide.label}
+              <strong>{guide.label}</strong>
+              {guide.startYear ? <small>{guide.startYear}</small> : null}
             </span>
           ))}
         </div>
@@ -355,6 +360,7 @@ function TreeBranch({
   const hasChildren = node.children.length > 0;
   const sortedChildren = sortSiblingTreeNodes(node.children);
   const partnersOnLeft = externalSide === "left";
+  const partnerCount = node.partners.length;
   const isPersonVisible = isTimelineVisible(person.id, visiblePersonIds);
   const partnerNodes = node.partners.map((partner) => {
     const relationshipStartDate = getPartnerRelationshipStartDate(person.id, partner.id, relationships);
@@ -392,10 +398,16 @@ function TreeBranch({
     <div
       className={`tree-branch ${hasChildren ? "has-children" : ""}`}
       data-tree-branch-id={branchKey}
-      style={rootGenerationOffset ? { marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } : undefined}
+      style={
+        {
+          ...(rootGenerationOffset ? { marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } : {}),
+          "--partner-spacer-count": partnerCount
+        } as CSSProperties
+      }
     >
       <div className={`couple-row ${partnersOnLeft ? "partners-left" : ""}`}>
         {partnersOnLeft ? partnerNodes : null}
+        {!partnersOnLeft && partnerCount > 0 ? <span className="couple-balance-spacer" aria-hidden="true" /> : null}
         <TreePerson
           person={person}
           primaryAnchor
@@ -411,6 +423,7 @@ function TreeBranch({
           canAddParent={(parentCounts[person.id] ?? 0) < 2}
           flagPortraitUrl={flagBackgrounds?.[person.id]}
         />
+        {partnersOnLeft && partnerCount > 0 ? <span className="couple-balance-spacer" aria-hidden="true" /> : null}
         {!partnersOnLeft ? partnerNodes : null}
       </div>
       {sortedChildren.length > 0 ? (
@@ -641,6 +654,31 @@ function getDescendantAnchorRank(
   return fallbackPerson ? (peopleRank.get(fallbackPerson.id) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
 }
 
+function getGenerationStartYear(
+  stage: HTMLElement,
+  stageRect: DOMRect,
+  generationYs: number[],
+  generationY: number,
+  toLocalY: (value: number) => number
+) {
+  const years = Array.from(stage.querySelectorAll<HTMLElement>(".tree-person")).flatMap((treePerson) => {
+    if (treePerson.dataset.timelineVisible === "false") return [];
+    const birthYear = Number(treePerson.dataset.birthYear);
+    if (!Number.isFinite(birthYear)) return [];
+    const card = treePerson.querySelector<HTMLElement>(".person-card");
+    if (!card) return [];
+    const rect = card.getBoundingClientRect();
+    const personY = toLocalY(rect.top - stageRect.top + rect.height / 2);
+    const nearestGenerationY = generationYs.reduce((nearest, candidate) =>
+      Math.abs(candidate - personY) < Math.abs(nearest - personY) ? candidate : nearest
+    );
+
+    return Math.abs(nearestGenerationY - generationY) < 4 ? [birthYear] : [];
+  });
+
+  return years.length > 0 ? Math.min(...years) : undefined;
+}
+
 function getUniqueGenerationYs(values: number[]) {
   return values
     .filter((value) => Number.isFinite(value))
@@ -707,6 +745,19 @@ function getParentChildKey(parentId: string, childId: string) {
 
 function cssEscape(value: string) {
   return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
+function extractBirthYear(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  const yearFirst = trimmed.match(/^(\d{4})/);
+  if (yearFirst) return Number(yearFirst[1]);
+
+  const dayFirst = trimmed.match(/\b(\d{4})\b/);
+  if (dayFirst) return Number(dayFirst[1]);
+
+  return null;
 }
 
 function getPartnerRelationshipStartDate(firstId: string, secondId: string, relationships: Relationship[]) {
@@ -786,6 +837,7 @@ function TreePerson({
       className={`tree-person ${timelineVisible ? "" : "timeline-hidden"}`}
       data-primary-anchor={primaryAnchor ? "true" : undefined}
       data-person-id={person.id}
+      data-birth-year={extractBirthYear(person.birthDate) ?? undefined}
       data-timeline-visible={timelineVisible ? "true" : "false"}
     >
       {canAddParent ? (

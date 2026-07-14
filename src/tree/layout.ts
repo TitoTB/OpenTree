@@ -175,6 +175,7 @@ function buildPersonGenerations(people: Person[], relationships: Relationship[])
   };
 
   groupIds.forEach((groupId) => visitGroup(groupId));
+  alignParentGenerationsWithAnchoredChildren(groupDepth, groupChildren);
 
   const personGenerations = new Map<PersonId, number>();
   people.forEach((person) => {
@@ -182,6 +183,31 @@ function buildPersonGenerations(people: Person[], relationships: Relationship[])
   });
 
   return normalizeGenerationStarts(personGenerations);
+}
+
+function alignParentGenerationsWithAnchoredChildren(
+  groupDepth: Map<PersonId, number>,
+  groupChildren: Map<PersonId, Set<PersonId>>
+) {
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 100) {
+    changed = false;
+    guard += 1;
+    groupChildren.forEach((childIds, parentId) => {
+      const parentDepth = groupDepth.get(parentId) ?? 0;
+      const anchoredParentDepth = Array.from(childIds).reduce((highestAllowedDepth, childId) => {
+        const childDepth = groupDepth.get(childId);
+        if (typeof childDepth !== "number" || childDepth <= 0) return highestAllowedDepth;
+        return Math.max(highestAllowedDepth, childDepth - 1);
+      }, parentDepth);
+
+      if (anchoredParentDepth > parentDepth) {
+        groupDepth.set(parentId, anchoredParentDepth);
+        changed = true;
+      }
+    });
+  }
 }
 
 function normalizeGenerationStarts(personGenerations: Map<PersonId, number>) {
