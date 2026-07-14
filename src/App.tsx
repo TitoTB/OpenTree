@@ -146,6 +146,8 @@ export function App() {
   const [nameStatus, setNameStatus] = useState("");
   const [selectedGivenName, setSelectedGivenName] = useState("");
   const [galleryInitialPersonId, setGalleryInitialPersonId] = useState("");
+  const [initialMapMode, setInitialMapMode] = useState<"people" | "photos" | "migrations">("people");
+  const [initialCalendarMode, setInitialCalendarMode] = useState<"calendar" | "history">("calendar");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("personalization");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState<WizardStep>("owner");
@@ -370,12 +372,14 @@ export function App() {
     setSidebarOpen(false);
   }
 
-  function showMapView() {
+  function showMapView(mode: "people" | "photos" | "migrations" = "people") {
+    setInitialMapMode(mode);
     setActiveView("map");
     setSidebarOpen(false);
   }
 
-  function showCalendarView() {
+  function showCalendarView(mode: "calendar" | "history" = "calendar") {
+    setInitialCalendarMode(mode);
     setActiveView("calendar");
     setSidebarOpen(false);
   }
@@ -1780,7 +1784,7 @@ export function App() {
             className={activeView === "map" ? "active" : ""}
             type="button"
             title={t.birthMap}
-            onClick={showMapView}
+            onClick={() => showMapView()}
           >
             <FontAwesomeEarthEuropeIcon size={20} />
             <span>{t.birthMap}</span>
@@ -1789,7 +1793,7 @@ export function App() {
             className={activeView === "calendar" ? "active" : ""}
             type="button"
             title={t.calendar}
-            onClick={showCalendarView}
+            onClick={() => showCalendarView()}
           >
             <CalendarDays size={20} />
             <span>{t.calendar}</span>
@@ -2121,6 +2125,7 @@ export function App() {
           photos={project.galleryPhotos ?? []}
           selectedId={selectedId}
           t={t}
+          initialMode={initialMapMode}
           showPhotos={displaySettings.showPhotos}
           onSelect={selectPerson}
         />
@@ -2132,6 +2137,7 @@ export function App() {
           worldHistoryEvents={project.worldHistoryEvents ?? {}}
           selectedId={selectedId}
           t={t}
+          initialMode={initialCalendarMode}
           showSaintDays={displaySettings.showSaintDays}
           onSelect={selectPerson}
           onOpenStarMap={selectPersonStarMap}
@@ -2149,6 +2155,8 @@ export function App() {
           onDeletePhoto={deleteGalleryPhoto}
           onSetPersonPhoto={setPersonPhotoFromGallery}
           initialPersonId={galleryInitialPersonId}
+          onOpenMapGallery={() => showMapView("photos")}
+          onOpenCalendarHistory={() => showCalendarView("history")}
         />
       ) : activeView === "conditions" ? (
         <ConditionsCatalogView
@@ -4721,6 +4729,7 @@ function BirthMapView({
   photos,
   selectedId,
   t,
+  initialMode,
   showPhotos,
   onSelect
 }: {
@@ -4729,6 +4738,7 @@ function BirthMapView({
   photos: GalleryPhoto[];
   selectedId: string;
   t: Record<string, string>;
+  initialMode: "people" | "photos" | "migrations";
   showPhotos: boolean;
   onSelect: (person: Person) => void;
 }) {
@@ -4737,6 +4747,9 @@ function BirthMapView({
   const mapElementRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   const tRef = useRef(t);
+  useEffect(() => {
+    setMapMode(initialMode);
+  }, [initialMode]);
   const birthPlaceGroups = useMemo(() => {
     const groups = new Map<string, { label: string; people: Person[] }>();
 
@@ -5883,7 +5896,9 @@ function GalleryView({
   onResolvePhotoLocation,
   onResolveMissingPhotoLocations,
   onDeletePhoto,
-  onSetPersonPhoto
+  onSetPersonPhoto,
+  onOpenMapGallery,
+  onOpenCalendarHistory
 }: {
   people: Person[];
   photos: GalleryPhoto[];
@@ -5895,6 +5910,8 @@ function GalleryView({
   onResolveMissingPhotoLocations: () => void;
   onDeletePhoto: (photoId: string) => void;
   onSetPersonPhoto: (photo: GalleryPhoto, personId: string) => void;
+  onOpenMapGallery: () => void;
+  onOpenCalendarHistory: () => void;
 }) {
   const [personFilter, setPersonFilter] = useState("");
   const [personSearchQuery, setPersonSearchQuery] = useState("");
@@ -6131,17 +6148,17 @@ function GalleryView({
             <span>{t.galleryFilterPeople}</span>
           </button>
           <button
-            className={`secondary-action compact-action ${activeGalleryFilter === "location" ? "active" : ""}`}
+            className="secondary-action compact-action"
             type="button"
-            onClick={() => setActiveGalleryFilter(activeGalleryFilter === "location" ? "" : "location")}
+            onClick={onOpenMapGallery}
           >
             <MapPinned size={16} />
             <span>{t.galleryFilterLocation}</span>
           </button>
           <button
-            className={`secondary-action compact-action ${activeGalleryFilter === "moment" ? "active" : ""}`}
+            className="secondary-action compact-action"
             type="button"
-            onClick={() => setActiveGalleryFilter(activeGalleryFilter === "moment" ? "" : "moment")}
+            onClick={onOpenCalendarHistory}
           >
             <CalendarDays size={16} />
             <span>{t.galleryFilterMoment}</span>
@@ -6353,6 +6370,7 @@ function BirthdayCalendarView({
   worldHistoryEvents,
   selectedId,
   t,
+  initialMode,
   showSaintDays,
   onSelect,
   onOpenStarMap,
@@ -6364,6 +6382,7 @@ function BirthdayCalendarView({
   worldHistoryEvents: Record<string, WorldHistoryEntry[]>;
   selectedId: string;
   t: Record<string, string>;
+  initialMode: "calendar" | "history";
   showSaintDays: boolean;
   onSelect: (person: Person) => void;
   onOpenStarMap: (person: Person) => void;
@@ -6374,6 +6393,9 @@ function BirthdayCalendarView({
   const [showBirthdayMarkers, setShowBirthdayMarkers] = useState(true);
   const [showSaintMarkers, setShowSaintMarkers] = useState(showSaintDays);
   const [showRelationshipMarkers, setShowRelationshipMarkers] = useState(true);
+  useEffect(() => {
+    setCalendarMode(initialMode);
+  }, [initialMode]);
   useEffect(() => {
     if (!showSaintDays) setShowSaintMarkers(false);
   }, [showSaintDays]);

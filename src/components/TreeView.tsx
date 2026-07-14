@@ -113,11 +113,7 @@ export function TreeView({
             ? getCenteredRect(visiblePartnerConnectors.map((element) => element.getBoundingClientRect()))
             : coupleRect;
         let parentX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
-        const parentBottomY = toLocalY(
-          visiblePartnerConnectors.length > 0
-            ? parentAnchorRect.top - stageRect.top + parentAnchorRect.height / 2
-            : parentAnchorRect.bottom - stageRect.top
-        );
+        const parentBottomY = toLocalY(parentAnchorRect.bottom - stageRect.top);
         const junctionY = toLocalY(childrenRect.top - stageRect.top);
         const childPoints = childAnchors.map((anchor) => {
           const anchorRect = anchor.getBoundingClientRect();
@@ -460,11 +456,11 @@ function getRelationshipKey(firstId: string, secondId: string) {
 function PartnerConnector({ hidden }: { hidden?: boolean }) {
   return (
     <span className={`partner-connector ${hidden ? "timeline-hidden" : ""}`} aria-hidden="true">
-      <svg className="rings-icon" viewBox="0 0 42 24" role="img">
-        <circle cx="16" cy="12" r="8" />
-        <circle cx="26" cy="12" r="8" />
-        <path d="M15 3h4l2 4" />
-        <path d="M23 3h4l-2 4" />
+      <svg className="rings-icon" viewBox="0 0 52 28" role="img">
+        <circle cx="22" cy="14" r="8.2" />
+        <circle cx="32" cy="14" r="8.2" />
+        <path d="M21 4.5h4l2 4" />
+        <path d="M29 4.5h4l-2 4" />
       </svg>
     </span>
   );

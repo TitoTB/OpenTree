@@ -21,15 +21,22 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
   const coveredIds = new Set<PersonId>();
   if (rootPerson) return walk(rootPerson, new Set<PersonId>(), coveredIds);
 
-  const roots = getRootCandidates(people, relationships, peopleWithParents)
+  const rootCandidates = getRootCandidates(people, relationships, peopleWithParents)
     .map((person) => ({
       person,
       score: countReachableFamily(person.id, relationships, new Set<PersonId>())
     }))
     .sort((first, second) => second.score - first.score || comparePeopleByBirthDate(first.person, second.person))
-    .map(({ person }) => person)
-    .map((person) => walk(person, new Set<PersonId>(), coveredIds))
-    .filter((node) => node.person || node.children.length > 0);
+    .map(({ person }) => person);
+  const roots: TreeNode[] = [];
+
+  rootCandidates.forEach((person) => {
+    if (coveredIds.has(person.id)) return;
+    const node = walk(person, new Set<PersonId>(), coveredIds);
+    if (node.person || node.children.length > 0) {
+      roots.push(node);
+    }
+  });
 
   if (roots.length === 0) return null;
   if (roots.length === 1) return roots[0];
@@ -48,8 +55,8 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
           (relationship.fromPersonId === person.id || partnerIds.includes(relationship.fromPersonId))
       )
       .map((relationship) => peopleById.get(relationship.toPersonId))
-        .filter((child): child is Person => Boolean(child))
-        .filter((child, index, all) => all.findIndex((candidate) => candidate.id === child.id) === index)
+      .filter((child): child is Person => Boolean(child))
+      .filter((child, index, all) => all.findIndex((candidate) => candidate.id === child.id) === index)
       .filter((child) => path.has(child.id) || !covered.has(child.id))
       .sort(comparePeopleByBirthDate)
       .map((child) =>
