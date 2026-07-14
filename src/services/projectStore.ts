@@ -8,6 +8,7 @@ export interface PendingProjectChange {
   id: string;
   status: "pending";
   role: "guest";
+  sessionToken?: string;
   summary: {
     addedPeople: number;
     editedPeople: number;
@@ -16,6 +17,7 @@ export interface PendingProjectChange {
   };
   proposedProject: TreeProject;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ServerSettings {

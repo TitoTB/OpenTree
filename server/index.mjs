@@ -15,6 +15,49 @@ const projectPath = join(dataDir, "project.json");
 const pendingPath = join(dataDir, "pending-project-changes.json");
 const sessions = new Map();
 
+const externalSourceProxies = [
+  {
+    prefix: "/ine-api",
+    origin: "https://www.ine.es",
+    accept: "application/json,text/plain,*/*",
+    allowedPath: (path) => path.startsWith("/apellidos/")
+  },
+  {
+    prefix: "/forebears-api",
+    origin: "https://forebears.io",
+    accept: "text/html,application/xhtml+xml",
+    fallbackToReader: true
+  },
+  {
+    prefix: "/geneanet-api",
+    origin: "https://es.geneanet.org",
+    accept: "text/html,application/xhtml+xml",
+    allowedPath: (path) => path.startsWith("/apellidos/"),
+    fallbackToReader: true
+  },
+  {
+    prefix: "/behindthename-api",
+    origin: "https://www.behindthename.com",
+    accept: "text/html,application/xhtml+xml",
+    allowedPath: (path) => path.startsWith("/name/")
+  },
+  {
+    prefix: "/translate-api",
+    origin: "https://api.mymemory.translated.net",
+    accept: "application/json,text/plain,*/*"
+  },
+  {
+    prefix: "/medlineplus-api",
+    origin: "https://wsearch.nlm.nih.gov",
+    accept: "application/json,text/xml,text/plain,*/*"
+  },
+  {
+    prefix: "/mayo-clinic-api",
+    origin: "https://www.mayoclinic.org",
+    accept: "text/html,application/xhtml+xml"
+  }
+];
+
 const defaultProjectSettings = {
   guestPhotoLimit: 50
 };
@@ -219,10 +262,14 @@ function readBody(request) {
 function bootstrapPayload(session) {
   const role = session?.role || null;
   const pendingChanges = role === "admin" ? loadPendingChanges() : [];
+  const guestPendingChange =
+    role === "guest" && session?.token
+      ? loadPendingChanges().find((change) => change.role === "guest" && change.sessionToken === session.token)
+      : null;
   return {
     authenticated: Boolean(role),
     role,
-    project: role ? loadProject() : null,
+    project: role ? guestPendingChange?.proposedProject || loadProject() : null,
     settings: config.settings,
     pendingProjectChanges: pendingChanges
   };
@@ -279,16 +326,24 @@ async function handleApi(request, response, pathname) {
     }
 
     const pendingChanges = loadPendingChanges();
+    const existingGuestChange = pendingChanges.find(
+      (candidate) => candidate.role === "guest" && candidate.sessionToken === session.token
+    );
     const nextChange = {
-      id: createId("guest-change"),
+      id: existingGuestChange?.id || createId("guest-change"),
       status: "pending",
       role: "guest",
+      sessionToken: session.token,
       summary: summarizeProjectChange(currentProject, sanitizedProject),
       proposedProject: sanitizedProject,
-      createdAt: now()
+      createdAt: existingGuestChange?.createdAt || now(),
+      updatedAt: now()
     };
-    savePendingChanges([...pendingChanges, nextChange]);
-    return sendJson(response, 202, { status: "pending", project: currentProject });
+    savePendingChanges([
+      ...pendingChanges.filter((candidate) => candidate.id !== nextChange.id),
+      nextChange
+    ]);
+    return sendJson(response, 202, { status: "pending", project: sanitizedProject });
   }
 
   if (session.role !== "admin") {
@@ -372,6 +427,57 @@ async function handleMediamassProxy(request, response, pathname) {
   response.end(await proxyResponse.text());
 }
 
+async function handleExternalSourceProxy(request, response, url, proxyConfig) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { Allow: "GET, HEAD" });
+    response.end();
+    return;
+  }
+
+  const externalPath = url.pathname.replace(proxyConfig.prefix, "") || "/";
+  if (proxyConfig.allowedPath && !proxyConfig.allowedPath(externalPath)) {
+    return sendJson(response, 400, { error: "INVALID_PROXY_PATH" });
+  }
+
+  const targetUrl = `${proxyConfig.origin}${externalPath}${url.search}`;
+  let proxyResponse = await fetch(targetUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+      Accept: proxyConfig.accept || "text/html,application/xhtml+xml,application/json,text/plain,*/*",
+      ...(proxyConfig.headers || {})
+    }
+  });
+
+  if (!proxyResponse.ok && proxyConfig.fallbackToReader) {
+    proxyResponse = await fetch(`https://r.jina.ai/http://${targetUrl.replace(/^https?:\/\//, "")}`, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+        Accept: "text/plain,text/markdown,text/html,*/*"
+      }
+    });
+  }
+
+  if (!proxyResponse.ok) {
+    return sendJson(response, proxyResponse.status, { error: "SOURCE_PROXY_ERROR" });
+  }
+
+  const contentType = proxyResponse.headers.get("content-type") || proxyConfig.contentType || "text/plain; charset=utf-8";
+  response.writeHead(200, {
+    "Content-Type": contentType,
+    "Cache-Control": "public, max-age=86400"
+  });
+
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+
+  const body = Buffer.from(await proxyResponse.arrayBuffer());
+  response.end(body);
+}
+
 async function handlePublicMetadataProxy(request, response, searchParams) {
   if (request.method !== "GET") {
     response.writeHead(405, { Allow: "GET" });
@@ -405,9 +511,41 @@ async function handlePublicMetadataProxy(request, response, searchParams) {
   return sendJson(response, 200, parsePublicMetadata(html, proxyResponse.url || targetUrl));
 }
 
-async function handlePublicImageProxy(request, response, searchParams) {
+async function handlePublicSearchProxy(request, response, searchParams) {
   if (request.method !== "GET") {
     response.writeHead(405, { Allow: "GET" });
+    response.end();
+    return;
+  }
+
+  const query = String(searchParams.get("query") || "").trim();
+  if (!query) {
+    return sendJson(response, 400, { error: "INVALID_PUBLIC_SEARCH_QUERY" });
+  }
+
+  const targetUrl = `https://r.jina.ai/http://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const searchResponse = await fetch(targetUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "OpenTree/0.1 (+https://github.com/TitoTB/OpenTree)",
+      Accept: "text/plain,text/markdown,text/html,*/*"
+    }
+  });
+
+  if (!searchResponse.ok) {
+    return sendJson(response, searchResponse.status, { error: "PUBLIC_SEARCH_ERROR" });
+  }
+
+  response.writeHead(200, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  response.end(await searchResponse.text());
+}
+
+async function handlePublicImageProxy(request, response, searchParams) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { Allow: "GET, HEAD" });
     response.end();
     return;
   }
@@ -439,7 +577,7 @@ async function handlePublicImageProxy(request, response, searchParams) {
     "Content-Type": contentType,
     "Cache-Control": "public, max-age=604800, immutable"
   });
-  response.end(body);
+  response.end(request.method === "HEAD" ? undefined : body);
 }
 
 function normalizePublicMetadataUrl(value) {
@@ -499,7 +637,17 @@ function readHtmlFirstImage(html) {
 }
 
 function readHtmlAttribute(tag, attribute) {
-  return tag.match(new RegExp(`\\b${attribute}=["']([^"']+)["']`, "i"))?.[1] || "";
+  return decodeHtmlAttribute(tag.match(new RegExp(`\\b${attribute}=["']([^"']+)["']`, "i"))?.[1] || "");
+}
+
+function decodeHtmlAttribute(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
 }
 
 function resolvePublicMetadataAssetUrl(assetUrl, sourceUrl) {
@@ -567,8 +715,19 @@ createServer(async (request, response) => {
       await handleMediamassProxy(request, response, url.pathname);
       return;
     }
+    const externalSourceProxy = externalSourceProxies.find(
+      (proxyConfig) => url.pathname === proxyConfig.prefix || url.pathname.startsWith(`${proxyConfig.prefix}/`)
+    );
+    if (externalSourceProxy) {
+      await handleExternalSourceProxy(request, response, url, externalSourceProxy);
+      return;
+    }
     if (url.pathname === "/public-metadata") {
       await handlePublicMetadataProxy(request, response, url.searchParams);
+      return;
+    }
+    if (url.pathname === "/public-search") {
+      await handlePublicSearchProxy(request, response, url.searchParams);
       return;
     }
     if (url.pathname === "/public-image") {

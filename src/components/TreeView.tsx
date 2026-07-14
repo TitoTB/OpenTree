@@ -113,7 +113,11 @@ export function TreeView({
             ? getCenteredRect(visiblePartnerConnectors.map((element) => element.getBoundingClientRect()))
             : coupleRect;
         let parentX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
-        const parentBottomY = toLocalY(parentAnchorRect.bottom - stageRect.top);
+        const parentBottomY = toLocalY(
+          visiblePartnerConnectors.length > 0
+            ? parentAnchorRect.top - stageRect.top + parentAnchorRect.height / 2
+            : parentAnchorRect.bottom - stageRect.top
+        );
         const junctionY = toLocalY(childrenRect.top - stageRect.top);
         const childPoints = childAnchors.map((anchor) => {
           const anchorRect = anchor.getBoundingClientRect();

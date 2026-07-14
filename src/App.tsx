@@ -166,7 +166,7 @@ export function App() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const treeCanvasRef = useRef<HTMLElement | null>(null);
   const treeContentRef = useRef<HTMLDivElement | null>(null);
-  const surnameAutoEnrichmentRef = useRef({ running: false, signature: "" });
+  const surnameAutoEnrichmentRef = useRef({ running: false, completedSignature: "", rerunRequested: false });
   const givenNameAutoEnrichmentRef = useRef({ running: false, signature: "" });
   const t = strings[locale];
   const lifeLabels = {
@@ -327,11 +327,15 @@ export function App() {
 
     const summaries = buildSurnameSummaries(project.people);
     const pendingSignature = buildPendingSurnameEnrichmentSignature(summaries, project.surnameProfiles ?? {});
-    if (!pendingSignature || pendingSignature === surnameAutoEnrichmentRef.current.signature) return;
+    if (!pendingSignature || pendingSignature === surnameAutoEnrichmentRef.current.completedSignature) return;
+    if (serverMode && serverRole === "guest") return;
+    if (surnameAutoEnrichmentRef.current.running) {
+      surnameAutoEnrichmentRef.current.rerunRequested = true;
+      return;
+    }
 
-    surnameAutoEnrichmentRef.current.signature = pendingSignature;
-    void enrichMissingSurnameProfiles({ silent: true });
-  }, [project?.people, project?.surnameProfiles]);
+    void enrichMissingSurnameProfiles({ silent: true, autoSignature: pendingSignature });
+  }, [project?.people, project?.surnameProfiles, serverMode, serverRole]);
 
   useEffect(() => {
     if (!project) return;
@@ -1195,8 +1199,9 @@ export function App() {
     await enrichMissingSurnameProfiles({ silent: false });
   }
 
-  async function enrichMissingSurnameProfiles({ silent }: { silent: boolean }) {
+  async function enrichMissingSurnameProfiles({ silent, autoSignature }: { silent: boolean; autoSignature?: string }) {
     if (!project) return;
+    if (serverMode && serverRole === "guest") return;
     if (surnameAutoEnrichmentRef.current.running) return;
 
     const summaries = buildSurnameSummaries(project.people);
@@ -1216,6 +1221,7 @@ export function App() {
     }
 
     surnameAutoEnrichmentRef.current.running = true;
+    surnameAutoEnrichmentRef.current.rerunRequested = false;
     let nextProfiles = { ...(project.surnameProfiles ?? {}) };
     let statsSavedCount = 0;
     let internationalSavedCount = 0;
@@ -1327,6 +1333,18 @@ export function App() {
       }
     } finally {
       surnameAutoEnrichmentRef.current.running = false;
+    }
+
+    const remainingSignature = buildPendingSurnameEnrichmentSignature(summaries, nextProfiles);
+    if (!remainingSignature && autoSignature) {
+      surnameAutoEnrichmentRef.current.completedSignature = autoSignature;
+    }
+
+    if (surnameAutoEnrichmentRef.current.rerunRequested) {
+      surnameAutoEnrichmentRef.current.rerunRequested = false;
+      window.setTimeout(() => {
+        void enrichMissingSurnameProfiles({ silent: true });
+      }, 250);
     }
 
     if (!silent) {
@@ -3341,7 +3359,17 @@ function PublicInfoPreviewCard({
   return (
     <div className="public-preview-card">
       <a className="public-preview-media" href={link.url} target="_blank" rel="noreferrer" aria-label={t.openSource}>
-        {link.imageUrl ? <img src={link.imageUrl} alt="" loading="lazy" /> : <span className="public-preview-fallback">{fallbackLabel}</span>}
+        <span className="public-preview-fallback">{fallbackLabel}</span>
+        {link.imageUrl ? (
+          <img
+            src={link.imageUrl}
+            alt=""
+            loading="lazy"
+            onError={(event) => {
+              event.currentTarget.hidden = true;
+            }}
+          />
+        ) : null}
       </a>
       <div>
         <a className="public-preview-title" href={link.url} target="_blank" rel="noreferrer">
@@ -6689,7 +6717,14 @@ function isUsefulWorldHistoryText(text: string | undefined, year?: number) {
     /\bano comun comenzado en\b/,
     /\bano bisiesto comenzado en\b/,
     /^\d{3,4} fue un ano\b/,
-    /^ano \d{3,4}\b/
+    /^ano \d{3,4}\b/,
+    /^(ministro|ministra|presidente|vicepresidente|vicepresidenta)\s+(de|del|de la)\b/,
+    /^presidente del gobierno\b/,
+    /^vicepresidente del gobierno\b/,
+    /^ministro de\b/,
+    /^ministra de\b/,
+    /^jefe del estado\b/,
+    /^gobierno de\b/
   ];
   return !genericPatterns.some((pattern) => pattern.test(withoutYearPrefix));
 }
@@ -6809,16 +6844,26 @@ function collectWikipediaYearListItems(document: Document) {
 function collectWikipediaSpainYearListItems(document: Document) {
   const items: Array<{ text: string; month?: number }> = [];
   let currentMonth: number | undefined;
+  let isEventSection = false;
   const nodes = Array.from(document.body.querySelectorAll("h2, h3, h4, ul"));
 
   nodes.forEach((node) => {
     if (["H2", "H3", "H4"].includes(node.tagName)) {
+      const heading = normalizePlainText(node.textContent ?? "");
       const month = getSpanishMonthNumberFromText(node.textContent ?? "");
       if (month) currentMonth = month;
+      if (node.tagName === "H2") {
+        isEventSection = isWikipediaSpainEventsHeading(heading);
+        if (!month) currentMonth = undefined;
+      } else if (month) {
+        isEventSection = true;
+      } else if (isWikipediaSpainNonEventHeading(heading)) {
+        isEventSection = false;
+      }
       return;
     }
 
-    if (node.tagName !== "UL") return;
+    if (node.tagName !== "UL" || !isEventSection) return;
     Array.from(node.children)
       .filter((child) => child.tagName === "LI")
       .forEach((child) => {
@@ -6833,6 +6878,38 @@ function collectWikipediaSpainYearListItems(document: Document) {
   });
 
   return items;
+}
+
+function isWikipediaSpainEventsHeading(heading: string) {
+  if (isWikipediaSpainNonEventHeading(heading)) return false;
+  return (
+    heading.includes("acontecimientos") ||
+    heading.includes("eventos") ||
+    heading.includes("sucesos") ||
+    heading.includes("cronologia") ||
+    Boolean(getSpanishMonthNumberFromText(heading))
+  );
+}
+
+function isWikipediaSpainNonEventHeading(heading: string) {
+  return [
+    "gobierno",
+    "politica",
+    "cargos",
+    "ministros",
+    "ministerios",
+    "nacimientos",
+    "fallecimientos",
+    "deportes",
+    "cine",
+    "television",
+    "musica",
+    "publicaciones",
+    "premios",
+    "referencias",
+    "bibliografia",
+    "enlaces externos"
+  ].some((pattern) => heading.includes(pattern));
 }
 
 function selectHistoricalYearItems<
@@ -7769,6 +7846,11 @@ function buildGoogleExactSearchUrl(name: string) {
 }
 
 async function fetchPublicSearchHtml(query: string) {
+  const proxiedResponse = await fetch(`/public-search?query=${encodeURIComponent(query)}`);
+  if (proxiedResponse.ok && proxiedResponse.headers.get("content-type")?.includes("text/plain")) {
+    return proxiedResponse.text();
+  }
+
   try {
     return await invoke<string>("fetch_public_search_html", { query });
   } catch (error) {
@@ -7864,7 +7946,7 @@ function parsePublicPageMetadata(html: string, sourceUrl: string): PublicInfoPre
     title: cleanSearchText(title),
     url: sourceUrl,
     snippet: cleanSearchText(snippet),
-    imageUrl: resolvePublicAssetUrl(imageUrl, sourceUrl)
+    imageUrl: proxifyPublicImageUrl(resolvePublicAssetUrl(imageUrl, sourceUrl))
   };
 }
 
@@ -7887,6 +7969,13 @@ function resolvePublicAssetUrl(assetUrl: string, sourceUrl: string) {
   } catch {
     return assetUrl.trim();
   }
+}
+
+function proxifyPublicImageUrl(imageUrl: string) {
+  const trimmed = imageUrl.trim();
+  if (!trimmed || trimmed.startsWith("/public-image?")) return trimmed;
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `/public-image?url=${encodeURIComponent(trimmed)}`;
 }
 
 function getPublicPreviewFallbackLabel(sourceUrl: string) {
@@ -7914,12 +8003,14 @@ function parsePublicSearchResults(html: string): PublicInfoPreview[] {
   return results.reduce<PublicInfoPreview[]>((items, result) => {
     const link = result.querySelector<HTMLAnchorElement>(".result__a");
     const snippet = result.querySelector<HTMLElement>(".result__snippet")?.textContent?.trim() ?? "";
+    const rawImageUrl = result.querySelector<HTMLImageElement>(".result__icon img, img")?.src?.trim() ?? "";
     if (!link?.href) return items;
 
     items.push({
       title: cleanSearchText(link.textContent ?? ""),
       url: normalizeDuckDuckGoResultUrl(link.href),
-      snippet: cleanSearchText(snippet)
+      snippet: cleanSearchText(snippet),
+      imageUrl: proxifyPublicImageUrl(resolvePublicAssetUrl(rawImageUrl, "https://duckduckgo.com/html/"))
     });
 
     return items;
@@ -7937,17 +8028,22 @@ function parsePublicSearchMarkdownResults(markdown: string): PublicInfoPreview[]
     const title = cleanSearchText(stripMarkdown(titleMatch[1]));
     const url = normalizeDuckDuckGoResultUrl(titleMatch[2]);
     let snippet = "";
+    let imageUrl = "";
 
     for (let nextIndex = index + 1; nextIndex < lines.length; nextIndex += 1) {
       const line = lines[nextIndex].trim();
       if (line.startsWith("## [")) break;
+      const imageMatch = line.match(/!\[[^\]]*]\((.+?)\)/);
+      if (!imageUrl && imageMatch?.[1]) {
+        imageUrl = proxifyPublicImageUrl(resolvePublicAssetUrl(normalizeDuckDuckGoResultUrl(imageMatch[1]), "https://duckduckgo.com/html/"));
+      }
       if (!line || line.startsWith("[![") || /^\[.+?\]\(.+?\)$/.test(line)) continue;
       snippet = cleanSearchText(stripMarkdown(line));
       if (snippet) break;
     }
 
     if (url) {
-      results.push({ title, url, snippet });
+      results.push({ title, url, snippet, imageUrl });
     }
   }
 
