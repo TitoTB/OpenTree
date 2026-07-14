@@ -2474,8 +2474,8 @@ export function App() {
               <PersonEditor
                 person={selectedPerson}
                 t={t}
-                onChange={updateSelectedPerson}
-                onSave={() => {
+                onSave={(patch) => {
+                  updateSelectedPerson(patch);
                   setPersonModalEditing(false);
                   setPersonProfileTab("details");
                 }}
@@ -3951,16 +3951,23 @@ function truncateMeaningPreview(value: string, maxWords = 44) {
 function PersonEditor({
   person,
   t,
-  onChange,
   onSave
 }: {
   person: Person;
   t: Record<string, string>;
-  onChange: (patch: Partial<Person>) => void;
-  onSave: () => void;
+  onSave: (patch: Partial<Person>) => void;
 }) {
-  const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
-  const isDeceased = person.isDeceased ?? Boolean(person.deathDate);
+  const [draft, setDraft] = useState<Person>(person);
+  const birthPlace = splitPlace(draft.birthPlace, draft.birthCity, draft.birthCountry);
+  const isDeceased = draft.isDeceased ?? Boolean(draft.deathDate);
+
+  useEffect(() => {
+    setDraft(person);
+  }, [person.id]);
+
+  function updateDraft(patch: Partial<Person>) {
+    setDraft((current) => ({ ...current, ...patch }));
+  }
 
   function handlePhotoChange(file?: File) {
     if (!file) return;
@@ -3972,7 +3979,7 @@ function PersonEditor({
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       if (typeof reader.result === "string") {
-        onChange({ photoUrl: reader.result });
+        updateDraft({ photoUrl: reader.result });
       }
     });
     reader.readAsDataURL(file);
@@ -3981,21 +3988,21 @@ function PersonEditor({
   return (
     <div className="editor-form">
       <section className="photo-editor">
-        <span className="portrait large" style={{ backgroundImage: person.photoUrl ? `url(${person.photoUrl})` : undefined }}>
-          {!person.photoUrl ? person.givenName.slice(0, 1) : null}
+        <span className="portrait large" style={{ backgroundImage: draft.photoUrl ? `url(${draft.photoUrl})` : undefined }}>
+          {!draft.photoUrl ? draft.givenName.slice(0, 1) : null}
         </span>
         <div className="photo-actions">
           <label className="secondary-action">
             <ImagePlus size={17} />
-            <span>{person.photoUrl ? t.changePhoto : t.addPhoto}</span>
+            <span>{draft.photoUrl ? t.changePhoto : t.addPhoto}</span>
             <input
               type="file"
               accept="image/*"
               onChange={(event) => handlePhotoChange(event.target.files?.[0])}
             />
           </label>
-          {person.photoUrl ? (
-            <button className="secondary-action subtle" type="button" onClick={() => onChange({ photoUrl: "" })}>
+          {draft.photoUrl ? (
+            <button className="secondary-action subtle" type="button" onClick={() => updateDraft({ photoUrl: "" })}>
               <X size={17} />
               <span>{t.removePhoto}</span>
             </button>
@@ -4004,17 +4011,17 @@ function PersonEditor({
       </section>
       <label>
         <span>{t.givenName}</span>
-        <input value={person.givenName} onChange={(event) => onChange({ givenName: event.target.value })} />
+        <input value={draft.givenName} onChange={(event) => updateDraft({ givenName: event.target.value })} />
       </label>
       <label>
         <span>{t.familyName}</span>
-        <input value={person.familyName} onChange={(event) => onChange({ familyName: event.target.value })} />
+        <input value={draft.familyName} onChange={(event) => updateDraft({ familyName: event.target.value })} />
       </label>
       <label>
         <span>{t.gender}</span>
         <select
-          value={person.gender}
-          onChange={(event) => onChange({ gender: event.target.value as Person["gender"] })}
+          value={draft.gender}
+          onChange={(event) => updateDraft({ gender: event.target.value as Person["gender"] })}
         >
           <option value="unknown">{t.unknownGender}</option>
           <option value="female">{t.female}</option>
@@ -4024,17 +4031,17 @@ function PersonEditor({
       <label>
         <span>{t.birthDate}</span>
         <input
-          value={person.birthDate ?? ""}
+          value={draft.birthDate ?? ""}
           placeholder="DD/MM/AAAA"
-          onChange={(event) => onChange({ birthDate: event.target.value })}
+          onChange={(event) => updateDraft({ birthDate: event.target.value })}
         />
       </label>
       <label>
         <span>{t.birthTime}</span>
         <input
           type="time"
-          value={person.birthTime ?? ""}
-          onChange={(event) => onChange({ birthTime: event.target.value })}
+          value={draft.birthTime ?? ""}
+          onChange={(event) => updateDraft({ birthTime: event.target.value })}
         />
       </label>
       <div className="editor-row">
@@ -4043,7 +4050,7 @@ function PersonEditor({
           <input
             value={birthPlace.city}
             onChange={(event) =>
-              onChange({
+              updateDraft({
                 birthCity: event.target.value,
                 birthCountry: birthPlace.country,
                 birthPlace: joinPlace(event.target.value, birthPlace.country)
@@ -4056,7 +4063,7 @@ function PersonEditor({
           <input
             value={birthPlace.country}
             onChange={(event) =>
-              onChange({
+              updateDraft({
                 birthCity: birthPlace.city,
                 birthCountry: event.target.value,
                 birthPlace: joinPlace(birthPlace.city, event.target.value)
@@ -4071,8 +4078,8 @@ function PersonEditor({
           <input
             type="number"
             step="0.000001"
-            value={person.birthLatitude ?? ""}
-            onChange={(event) => onChange({ birthLatitude: parseOptionalNumber(event.target.value) })}
+            value={draft.birthLatitude ?? ""}
+            onChange={(event) => updateDraft({ birthLatitude: parseOptionalNumber(event.target.value) })}
           />
         </label>
         <label>
@@ -4080,8 +4087,8 @@ function PersonEditor({
           <input
             type="number"
             step="0.000001"
-            value={person.birthLongitude ?? ""}
-            onChange={(event) => onChange({ birthLongitude: parseOptionalNumber(event.target.value) })}
+            value={draft.birthLongitude ?? ""}
+            onChange={(event) => updateDraft({ birthLongitude: parseOptionalNumber(event.target.value) })}
           />
         </label>
       </div>
@@ -4090,7 +4097,7 @@ function PersonEditor({
           type="checkbox"
           checked={isDeceased}
           onChange={(event) =>
-            onChange(
+            updateDraft(
               event.target.checked
                 ? { isDeceased: true }
                 : { isDeceased: false, deathDate: "", deathCity: "", deathCountry: "", deathPlace: "" }
@@ -4104,15 +4111,38 @@ function PersonEditor({
           <label>
             <span>{t.deathDate}</span>
             <input
-              value={person.deathDate ?? ""}
+              value={draft.deathDate ?? ""}
               placeholder="DD/MM/AAAA"
-              onChange={(event) => onChange({ deathDate: event.target.value, isDeceased: true })}
+              onChange={(event) => updateDraft({ deathDate: event.target.value, isDeceased: true })}
             />
           </label>
         </>
       ) : null}
       <div className="profile-actions">
-        <button className="primary-action" type="button" onClick={onSave}>
+        <button
+          className="primary-action"
+          type="button"
+          onClick={() =>
+            onSave({
+              photoUrl: draft.photoUrl,
+              givenName: draft.givenName,
+              familyName: draft.familyName,
+              gender: draft.gender,
+              birthDate: draft.birthDate,
+              birthTime: draft.birthTime,
+              birthCity: draft.birthCity,
+              birthCountry: draft.birthCountry,
+              birthPlace: draft.birthPlace,
+              birthLatitude: draft.birthLatitude,
+              birthLongitude: draft.birthLongitude,
+              isDeceased: draft.isDeceased,
+              deathDate: draft.deathDate,
+              deathCity: draft.deathCity,
+              deathCountry: draft.deathCountry,
+              deathPlace: draft.deathPlace
+            })
+          }
+        >
           <Check size={17} />
           <span>{t.save}</span>
         </button>
@@ -5922,6 +5952,7 @@ function GalleryView({
   const [facePersonByPhoto, setFacePersonByPhoto] = useState<Record<string, string>>({});
   const [draftFace, setDraftFace] = useState<GalleryDraftFace | null>(null);
   const [editingPhotoId, setEditingPhotoId] = useState("");
+  const [editingPhotoDraft, setEditingPhotoDraft] = useState<GalleryPhoto | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedPersonIds = personFilter.split(",").map((id) => id.trim()).filter(Boolean);
   const peopleById = new Map(people.map((person) => [person.id, person]));
@@ -5935,7 +5966,7 @@ function GalleryView({
       return normalizePlaceName(fullName(person)).includes(query);
     })
     .slice(0, 10);
-  const editingPhoto = photos.find((photo) => photo.id === editingPhotoId) ?? null;
+  const editingPhoto = editingPhotoDraft;
   const locatedPhotos = useMemo(() => photos.filter(hasGalleryPhotoCoordinates), [photos]);
   const galleryYearBounds = useMemo(() => getGalleryYearBounds(photos), [photos]);
   const isLocationFilterActive = activeGalleryFilter === "location" && Boolean(locationBounds);
@@ -5988,6 +6019,42 @@ function GalleryView({
       return { start: galleryYearBounds.min, end: galleryYearBounds.max };
     });
   }, [activeGalleryFilter, galleryYearBounds]);
+
+  useEffect(() => {
+    if (!editingPhotoId) {
+      setEditingPhotoDraft(null);
+      setDraftFace(null);
+      return;
+    }
+
+    const sourcePhoto = photos.find((photo) => photo.id === editingPhotoId);
+    setEditingPhotoDraft(sourcePhoto ? { ...sourcePhoto, personIds: [...sourcePhoto.personIds], faceRegions: [...(sourcePhoto.faceRegions ?? [])] } : null);
+  }, [editingPhotoId]);
+
+  function closePhotoEditor() {
+    setEditingPhotoId("");
+    setEditingPhotoDraft(null);
+    setDraftFace(null);
+  }
+
+  function updateEditingPhotoDraft(patch: Partial<GalleryPhoto>) {
+    setEditingPhotoDraft((current) => (current ? { ...current, ...patch } : current));
+  }
+
+  function saveEditingPhotoDraft() {
+    if (!editingPhotoDraft) return;
+    onUpdatePhoto(editingPhotoDraft.id, {
+      title: editingPhotoDraft.title,
+      takenAt: editingPhotoDraft.takenAt,
+      location: editingPhotoDraft.location,
+      latitude: editingPhotoDraft.latitude,
+      longitude: editingPhotoDraft.longitude,
+      notes: editingPhotoDraft.notes,
+      personIds: editingPhotoDraft.personIds,
+      faceRegions: editingPhotoDraft.faceRegions
+    });
+    closePhotoEditor();
+  }
 
   function togglePersonFilter(personId: string) {
     const nextIds = selectedPersonIds.includes(personId)
@@ -6067,11 +6134,11 @@ function GalleryView({
     const faceRegions = [...(photo.faceRegions ?? []).filter((region) => region.personId !== nextDraft.personId), nextRegion];
     const personIds = photo.personIds.includes(nextDraft.personId) ? photo.personIds : [...photo.personIds, nextDraft.personId];
 
-    onUpdatePhoto(photo.id, { faceRegions, personIds });
+    updateEditingPhotoDraft({ faceRegions, personIds });
   }
 
   function removeFaceRegion(photo: GalleryPhoto, regionId: string) {
-    onUpdatePhoto(photo.id, { faceRegions: (photo.faceRegions ?? []).filter((region) => region.id !== regionId) });
+    updateEditingPhotoDraft({ faceRegions: (photo.faceRegions ?? []).filter((region) => region.id !== regionId) });
   }
 
   function renderFaceRegions(photo: GalleryPhoto) {
@@ -6272,14 +6339,14 @@ function GalleryView({
         </div>
     </section>
     {editingPhoto ? (
-      <div className="modal-backdrop gallery-editor-backdrop" role="presentation" onMouseDown={() => setEditingPhotoId("")}>
+      <div className="modal-backdrop gallery-editor-backdrop" role="presentation" onMouseDown={closePhotoEditor}>
         <section className="person-modal gallery-editor-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
           <header className="modal-header">
             <div>
               <span>{t.photoFaceEditor}</span>
               <h2>{editingPhoto.title || editingPhoto.fileName || t.galleryPhoto}</h2>
             </div>
-            <button type="button" title={t.close} aria-label={t.close} onClick={() => setEditingPhotoId("")}>
+            <button type="button" title={t.close} aria-label={t.close} onClick={closePhotoEditor}>
               <X size={20} />
             </button>
           </header>
@@ -6299,7 +6366,7 @@ function GalleryView({
                 <span>{t.galleryPhotoTitle}</span>
                 <input
                   value={editingPhoto.title ?? ""}
-                  onChange={(event) => onUpdatePhoto(editingPhoto.id, { title: event.target.value })}
+                  onChange={(event) => updateEditingPhotoDraft({ title: event.target.value })}
                 />
               </label>
               <div className="editor-row">
@@ -6308,16 +6375,15 @@ function GalleryView({
                   <input
                     value={editingPhoto.takenAt ?? ""}
                     placeholder="DD/MM/AAAA"
-                    onChange={(event) => onUpdatePhoto(editingPhoto.id, { takenAt: event.target.value })}
+                    onChange={(event) => updateEditingPhotoDraft({ takenAt: event.target.value })}
                   />
                 </label>
                 <label>
                   <span>{t.place}</span>
                   <input
                     value={editingPhoto.location ?? ""}
-                    onBlur={(event) => onResolvePhotoLocation(editingPhoto.id, event.target.value)}
                     onChange={(event) =>
-                      onUpdatePhoto(editingPhoto.id, {
+                      updateEditingPhotoDraft({
                         location: event.target.value,
                         latitude: undefined,
                         longitude: undefined
@@ -6347,12 +6413,12 @@ function GalleryView({
               <textarea
                 value={editingPhoto.notes ?? ""}
                 placeholder={t.notes}
-                onChange={(event) => onUpdatePhoto(editingPhoto.id, { notes: event.target.value })}
+                onChange={(event) => updateEditingPhotoDraft({ notes: event.target.value })}
               />
             </aside>
           </div>
           <footer className="modal-footer">
-            <button className="primary-action" type="button" onClick={() => setEditingPhotoId("")}>
+            <button className="primary-action" type="button" onClick={saveEditingPhotoDraft}>
               <Check size={17} />
               <span>{t.save}</span>
             </button>

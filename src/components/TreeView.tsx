@@ -101,7 +101,7 @@ export function TreeView({
           });
 
         if (childAnchors.length === 0) return;
-        const visibleParentPeople = Array.from(coupleRow.querySelectorAll<HTMLElement>(":scope > .tree-person")).filter(
+        const visibleParentPeople = getCoupleRowPeople(coupleRow).filter(
           (treePerson) => treePerson.dataset.timelineVisible !== "false"
         );
         if (visibleParentPeople.length === 0) return;
@@ -488,6 +488,12 @@ function getCenteredRect(rects: DOMRect[]) {
     right: maxX,
     bottom: maxY
   };
+}
+
+function getCoupleRowPeople(coupleRow: HTMLElement) {
+  return Array.from(
+    coupleRow.querySelectorAll<HTMLElement>(":scope > .tree-person, :scope > .couple-partner > .tree-person")
+  );
 }
 
 function formatCoord(value: number) {
