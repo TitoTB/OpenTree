@@ -295,17 +295,18 @@ function TreeBranch({
     );
   }
 
+  const person = node.person;
   const hasChildren = node.children.length > 0;
   const sortedChildren = sortTreeNodesByBirthDate(node.children);
   const partnersOnLeft = externalSide === "left";
-  const isPersonVisible = isTimelineVisible(node.person.id, visiblePersonIds);
+  const isPersonVisible = isTimelineVisible(person.id, visiblePersonIds);
   const partnerNodes = node.partners.map((partner) => (
     <div className={`couple-partner ${partnersOnLeft ? "partner-left" : ""}`} key={partner.id}>
       <PartnerConnector
         hidden={
           !isPersonVisible ||
           !isTimelineVisible(partner.id, visiblePersonIds) ||
-          !isTimelinePartnerVisible(node.person.id, partner.id, visiblePartnerRelationshipKeys)
+          !isTimelinePartnerVisible(person.id, partner.id, visiblePartnerRelationshipKeys)
         }
       />
       <TreePerson
@@ -331,9 +332,9 @@ function TreeBranch({
       <div className={`couple-row ${partnersOnLeft ? "partners-left" : ""}`}>
         {partnersOnLeft ? partnerNodes : null}
         <TreePerson
-          person={node.person}
+          person={person}
           primaryAnchor
-          selected={selectedId === node.person.id}
+          selected={selectedId === person.id}
           timelineVisible={isPersonVisible}
           onSelect={onSelect}
           onAddRelative={onAddRelative}
@@ -342,8 +343,8 @@ function TreeBranch({
           displaySettings={displaySettings}
           clinicalConditions={clinicalConditions}
           clinicalCategories={clinicalCategories}
-          canAddParent={(parentCounts[node.person.id] ?? 0) < 2}
-          flagPortraitUrl={flagBackgrounds?.[node.person.id]}
+          canAddParent={(parentCounts[person.id] ?? 0) < 2}
+          flagPortraitUrl={flagBackgrounds?.[person.id]}
         />
         {!partnersOnLeft ? partnerNodes : null}
       </div>
@@ -351,8 +352,8 @@ function TreeBranch({
         <div className="children-row">
           {sortedChildren.map((child, index) => (
             <TreeBranch
-              key={child.person.id}
-              branchKey={`${branchKey}-${child.person.id}`}
+              key={child.person?.id ?? `child-${index}`}
+              branchKey={`${branchKey}-${child.person?.id ?? `child-${index}`}`}
               externalSide={getBranchSide(index, sortedChildren.length)}
               node={child}
               fallbackPeople={fallbackPeople}
@@ -377,7 +378,7 @@ function TreeBranch({
 }
 
 function normalizeTreeNodes(node: TreeViewProps["node"], fallbackPeople: Person[]) {
-  const nodes = flattenTreeNodes(node).sort((first, second) => comparePeopleByBirthDate(first.person, second.person));
+  const nodes = flattenTreeNodes(node).sort((first, second) => compareNullableTreePeople(first.person, second.person));
 
   if (nodes.length > 0) return nodes;
 
@@ -385,7 +386,7 @@ function normalizeTreeNodes(node: TreeViewProps["node"], fallbackPeople: Person[
 }
 
 function sortTreeNodesByBirthDate(nodes: TreeNode[]) {
-  return [...nodes].sort((first, second) => comparePeopleByBirthDate(first.person, second.person));
+  return [...nodes].sort((first, second) => compareNullableTreePeople(first.person, second.person));
 }
 
 function flattenTreeNodes(node: TreeViewProps["node"]): TreeNode[] {
@@ -393,6 +394,13 @@ function flattenTreeNodes(node: TreeViewProps["node"]): TreeNode[] {
   if (Array.isArray(node)) return node.flatMap((child) => flattenTreeNodes(child));
   if (node.person) return [node];
   return node.children.flatMap((child) => flattenTreeNodes(child));
+}
+
+function compareNullableTreePeople(first: Person | null, second: Person | null) {
+  if (first && second) return comparePeopleByBirthDate(first, second);
+  if (first) return -1;
+  if (second) return 1;
+  return 0;
 }
 
 function getUniqueGenerationYs(values: number[]) {
@@ -452,11 +460,11 @@ function getRelationshipKey(firstId: string, secondId: string) {
 function PartnerConnector({ hidden }: { hidden?: boolean }) {
   return (
     <span className={`partner-connector ${hidden ? "timeline-hidden" : ""}`} aria-hidden="true">
-      <svg className="rings-icon" viewBox="0 0 44 24" role="img">
-        <circle cx="17" cy="13" r="8" />
-        <circle cx="27" cy="13" r="8" />
-        <path d="M16 4h4l2 4" />
-        <path d="M24 4h4l-2 4" />
+      <svg className="rings-icon" viewBox="0 0 42 24" role="img">
+        <circle cx="16" cy="12" r="8" />
+        <circle cx="26" cy="12" r="8" />
+        <path d="M15 3h4l2 4" />
+        <path d="M23 3h4l-2 4" />
       </svg>
     </span>
   );

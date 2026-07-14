@@ -9,6 +9,11 @@ export interface PendingProjectChange {
   status: "pending";
   role: "guest";
   sessionToken?: string;
+  kind?: "add_person" | "edit_person" | "add_relationship" | "edit_relationship" | "add_photo" | "edit_photo" | "project_snapshot";
+  entityType?: "person" | "relationship" | "photo" | "project";
+  entityId?: string;
+  title?: string;
+  details?: string[];
   summary: {
     addedPeople: number;
     editedPeople: number;
@@ -135,7 +140,7 @@ export function saveProject(project: TreeProject) {
   } catch (error) {
     console.error("OpenTree could not save the project.", error);
     window.alert(
-      "No se ha podido guardar el proyecto. Es posible que el almacenamiento local estÃ© lleno; prueba a importar fotos mÃ¡s ligeras o elimina algunas imÃ¡genes."
+      "No se ha podido guardar el proyecto. Es posible que el almacenamiento local esté lleno; prueba a importar fotos más ligeras o elimina algunas imágenes."
     );
     return false;
   }

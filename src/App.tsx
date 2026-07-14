@@ -23,6 +23,7 @@ import {
   MapPinned,
   Maximize2,
   Moon,
+  Paperclip,
   Palette,
   Pencil,
   Plus,
@@ -71,6 +72,7 @@ import type {
   GalleryFaceRegion,
   Locale,
   Person,
+  PersonDocument,
   PublicInfoLink,
   Relationship,
   SurnameProfile,
@@ -135,7 +137,6 @@ export function App() {
   const [serverSettings, setServerSettings] = useState<ServerSettings>({ guestPhotoLimit: 50 });
   const [pendingProjectChanges, setPendingProjectChanges] = useState<PendingProjectChange[]>([]);
   const [authError, setAuthError] = useState("");
-  const [syncStatus, setSyncStatus] = useState("");
   const [locale, setLocale] = useState<Locale>(project?.locale ?? "es");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(project?.people[0]?.id ?? "");
@@ -166,6 +167,9 @@ export function App() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const treeCanvasRef = useRef<HTMLElement | null>(null);
   const treeContentRef = useRef<HTMLDivElement | null>(null);
+  const treeAutoFitFrameRef = useRef(0);
+  const treeAutoFitInnerFrameRef = useRef(0);
+  const treeViewportTouchedRef = useRef(false);
   const surnameAutoEnrichmentRef = useRef({ running: false, completedSignature: "", rerunRequested: false });
   const givenNameAutoEnrichmentRef = useRef({ running: false, signature: "" });
   const t = strings[locale];
@@ -225,13 +229,6 @@ export function App() {
           setLocale(detail.project.locale);
           setSelectedId((current) => detail.project?.people.some((person) => person.id === current) ? current : detail.project?.people[0]?.id ?? "");
         }
-        if (detail.status === "pending") {
-          setSyncStatus("Tu cambio se ha enviado al administrador para su aprobación.");
-        } else if (detail.status === "saved") {
-          setSyncStatus("");
-        } else if (detail.error) {
-          setSyncStatus("No se ha podido sincronizar el cambio con el servidor.");
-        }
       }),
     []
   );
@@ -285,7 +282,7 @@ export function App() {
   );
   const tree = useMemo(
     () => (project ? buildVerticalTree(project.people, project.relationships) : null),
-    [project]
+    [project?.people, project?.relationships]
   );
   const treeFlagBackgrounds = useMemo(
     () =>
@@ -311,15 +308,13 @@ export function App() {
 
   useEffect(() => {
     if (activeView !== "tree" || !tree) return;
+    if (treeViewportTouchedRef.current) return;
 
-    let innerFrame = 0;
-    const frame = window.requestAnimationFrame(() => {
-      innerFrame = window.requestAnimationFrame(() => fitTreeToView());
+    cancelPendingTreeAutoFit();
+    treeAutoFitFrameRef.current = window.requestAnimationFrame(() => {
+      treeAutoFitInnerFrameRef.current = window.requestAnimationFrame(() => fitTreeToView());
     });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.cancelAnimationFrame(innerFrame);
-    };
+    return cancelPendingTreeAutoFit;
   }, [activeView, tree]);
 
   useEffect(() => {
@@ -419,6 +414,7 @@ export function App() {
   }
 
   function showTreeView() {
+    treeViewportTouchedRef.current = false;
     setActiveView("tree");
     setSidebarOpen(false);
   }
@@ -767,6 +763,53 @@ export function App() {
       people: project.people.map((person) =>
         person.id === selectedPerson.id
           ? { ...person, publicInfoLinks: (person.publicInfoLinks ?? []).filter((link) => link.id !== linkId) }
+          : person
+      ),
+      updatedAt: new Date().toISOString()
+    };
+
+    setProject(nextProject);
+    saveProject(nextProject);
+  }
+
+  async function addDocumentToSelectedPerson(file?: File) {
+    if (!project || !selectedPerson || !file) return;
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      window.alert(t.pdfInvalid);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const document: PersonDocument = {
+      id: createId("document"),
+      title: file.name.replace(/\.pdf$/i, ""),
+      fileName: file.name,
+      mimeType: file.type || "application/pdf",
+      dataUrl: await readFileAsDataUrl(file),
+      createdAt: now
+    };
+    const nextProject = {
+      ...project,
+      people: project.people.map((person) =>
+        person.id === selectedPerson.id
+          ? { ...person, documents: [...(person.documents ?? []), document] }
+          : person
+      ),
+      updatedAt: now
+    };
+
+    setProject(nextProject);
+    saveProject(nextProject);
+  }
+
+  function removeSelectedPersonDocument(documentId: string) {
+    if (!project || !selectedPerson) return;
+
+    const nextProject = {
+      ...project,
+      people: project.people.map((person) =>
+        person.id === selectedPerson.id
+          ? { ...person, documents: (person.documents ?? []).filter((document) => document.id !== documentId) }
           : person
       ),
       updatedAt: new Date().toISOString()
@@ -1202,7 +1245,11 @@ export function App() {
   async function enrichMissingSurnameProfiles({ silent, autoSignature }: { silent: boolean; autoSignature?: string }) {
     if (!project) return;
     if (serverMode && serverRole === "guest") return;
-    if (surnameAutoEnrichmentRef.current.running) return;
+    if (surnameAutoEnrichmentRef.current.running) {
+      surnameAutoEnrichmentRef.current.rerunRequested = true;
+      if (!silent) setSurnameStatus(t.loadingAllSurnameData.replace("{current}", "1").replace("{total}", "...").replace("{surname}", ""));
+      return;
+    }
 
     const summaries = buildSurnameSummaries(project.people);
     const pendingSummaries = summaries.filter((summary) => {
@@ -1343,7 +1390,7 @@ export function App() {
     if (surnameAutoEnrichmentRef.current.rerunRequested) {
       surnameAutoEnrichmentRef.current.rerunRequested = false;
       window.setTimeout(() => {
-        void enrichMissingSurnameProfiles({ silent: true });
+        void enrichMissingSurnameProfiles({ silent });
       }, 250);
     }
 
@@ -1451,11 +1498,25 @@ export function App() {
     }
   }
 
+  function cancelPendingTreeAutoFit() {
+    if (treeAutoFitFrameRef.current) {
+      window.cancelAnimationFrame(treeAutoFitFrameRef.current);
+      treeAutoFitFrameRef.current = 0;
+    }
+    if (treeAutoFitInnerFrameRef.current) {
+      window.cancelAnimationFrame(treeAutoFitInnerFrameRef.current);
+      treeAutoFitInnerFrameRef.current = 0;
+    }
+  }
+
   function updateTreeZoom(delta: number) {
+    treeViewportTouchedRef.current = true;
+    cancelPendingTreeAutoFit();
     setTreeZoom((currentZoom) => clampZoom(currentZoom + delta));
   }
 
   function fitTreeToView() {
+    cancelPendingTreeAutoFit();
     const canvas = treeCanvasRef.current;
     const content = treeContentRef.current;
     if (!canvas || !content) return;
@@ -1480,6 +1541,7 @@ export function App() {
       x: targetCenterX - scaledCenterX,
       y: targetCenterY - scaledCenterY
     });
+    treeViewportTouchedRef.current = false;
   }
 
   function printCurrentTreeToPdf() {
@@ -1743,13 +1805,24 @@ export function App() {
           </button>
           {serverRole === "admin" ? (
             <button
-              className={activeView === "contributions" ? "active" : ""}
+              className={`${activeView === "contributions" ? "active" : ""} ${
+                pendingProjectChanges.length > 0 ? "has-pending-badge" : ""
+              }`}
               type="button"
-              title={t.contributionInbox}
+              title={
+                pendingProjectChanges.length > 0
+                  ? `${t.contributionInbox}: ${pendingProjectChanges.length} pendiente(s)`
+                  : t.contributionInbox
+              }
               onClick={showContributionsView}
             >
               <Inbox size={20} />
               <span>{t.contributionInbox}</span>
+              {pendingProjectChanges.length > 0 ? (
+                <span className="rail-badge" aria-label={`${pendingProjectChanges.length} cambios pendientes`}>
+                  {pendingProjectChanges.length > 99 ? "99+" : pendingProjectChanges.length}
+                </span>
+              ) : null}
             </button>
           ) : null}
           {serverRole === "admin" ? (
@@ -1782,8 +1855,6 @@ export function App() {
         <div className="expanded-menu" />
       </aside>
 
-      {syncStatus ? <div className="sync-toast">{syncStatus}</div> : null}
-
       {activeView === "tree" ? (
         <section
           ref={treeCanvasRef}
@@ -1792,6 +1863,8 @@ export function App() {
           }`}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest("button, input, .tree-controls-stack")) return;
+            treeViewportTouchedRef.current = true;
+            cancelPendingTreeAutoFit();
             setDragStart({ x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y });
           }}
           onWheel={(event) => {
@@ -2261,8 +2334,15 @@ export function App() {
                 <header>
                   <div>
                     <span className="status-pill status-pending">Pendiente</span>
-                    <h2>Cambio enviado por invitado</h2>
+                    <h2>{change.title || "Cambio enviado por invitado"}</h2>
                     <p>{formatPendingProjectChangeSummary(change)}</p>
+                    {change.details?.length ? (
+                      <ul className="contribution-detail-list">
+                        {change.details.map((detail) => (
+                          <li key={detail}>{detail}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                   <div className="row-actions">
                     <button
@@ -2417,6 +2497,8 @@ export function App() {
                 onUpdateRelationshipStartDate={updateRelationshipStartDate}
                 onSetPersonPhotoFromGallery={setPersonPhotoFromGallery}
                 onOpenPersonGallery={openPersonGallery}
+                onAddDocument={addDocumentToSelectedPerson}
+                onRemoveDocument={removeSelectedPersonDocument}
                 onSaveFamousBirth={saveFamousBirth}
               />
             )}
@@ -2474,6 +2556,24 @@ export function App() {
 }
 
 function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () => void }) {
+  const ancestorSources = [
+    {
+      title: t.literalBirthCertificate,
+      description: t.literalBirthCertificateDescription,
+      url: "https://sede.mjusticia.gob.es/es/tramites/certificado-nacimiento"
+    },
+    {
+      title: t.literalDeathCertificate,
+      description: t.literalDeathCertificateDescription,
+      url: "https://sede.mjusticia.gob.es/tramites/certificado-defuncion"
+    },
+    {
+      title: t.literalMarriageCertificate,
+      description: t.literalMarriageCertificateDescription,
+      url: "https://sede.mjusticia.gob.es/tramites/certificado-matrimonio"
+    }
+  ];
+
   return (
     <section className="ancestors-view">
       <header className="people-view-header">
@@ -2484,26 +2584,23 @@ function AncestorsView({ t, onBack }: { t: Record<string, string>; onBack: () =>
         </button>
       </header>
       <div className="ancestor-source-grid">
-        <a
-          className="ancestor-source-card"
-          href="https://sede.mjusticia.gob.es/es/tramites/certificado-nacimiento"
-          target="_blank"
-          rel="noreferrer"
-        >
-          <div>
-            <span className="eyebrow">{t.officialSource}</span>
-            <h2>{t.literalBirthCertificate}</h2>
-          </div>
-          <div className="ancestor-source-badges" aria-hidden="true">
-            <span>{t.free}</span>
-            <span>{t.online}</span>
-          </div>
-          <p>{t.literalBirthCertificateDescription}</p>
-          <span className="source-card-link">
-            <SquareArrowOutUpRight size={17} />
-            {t.openExternalSource}
-          </span>
-        </a>
+        {ancestorSources.map((source) => (
+          <a className="ancestor-source-card" href={source.url} target="_blank" rel="noreferrer" key={source.url}>
+            <div>
+              <span className="eyebrow">{t.officialSource}</span>
+              <h2>{source.title}</h2>
+            </div>
+            <div className="ancestor-source-badges" aria-hidden="true">
+              <span>{t.free}</span>
+              <span>{t.online}</span>
+            </div>
+            <p>{source.description}</p>
+            <span className="source-card-link">
+              <SquareArrowOutUpRight size={17} />
+              {t.openExternalSource}
+            </span>
+          </a>
+        ))}
       </div>
     </section>
   );
@@ -2803,6 +2900,8 @@ function PersonProfile({
   onUpdateRelationshipStartDate,
   onSetPersonPhotoFromGallery,
   onOpenPersonGallery,
+  onAddDocument,
+  onRemoveDocument,
   onSaveFamousBirth
 }: {
   person: Person;
@@ -2831,6 +2930,8 @@ function PersonProfile({
   onUpdateRelationshipStartDate: (relationshipId: string, startDate: string) => void;
   onSetPersonPhotoFromGallery: (photo: GalleryPhoto, personId: string) => void;
   onOpenPersonGallery: (person: Person) => void;
+  onAddDocument: (file?: File) => void;
+  onRemoveDocument: (documentId: string) => void;
   onSaveFamousBirth: (cacheKey: string, match: FamousBirthMatch | null) => void;
 }) {
   const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
@@ -2934,6 +3035,12 @@ function PersonProfile({
               </div>
             </section>
           ) : null}
+          <PersonDocumentsPanel
+            documents={person.documents ?? []}
+            t={t}
+            onAddDocument={onAddDocument}
+            onRemoveDocument={onRemoveDocument}
+          />
         </>
       ) : activeTab === "clinical" ? (
         <ClinicalProfilePanel
@@ -2959,6 +3066,58 @@ function PersonProfile({
         <StarMapPanel person={person} t={t} onEdit={onEdit} />
       )}
     </div>
+  );
+}
+
+function PersonDocumentsPanel({
+  documents,
+  t,
+  onAddDocument,
+  onRemoveDocument
+}: {
+  documents: PersonDocument[];
+  t: Record<string, string>;
+  onAddDocument: (file?: File) => void;
+  onRemoveDocument: (documentId: string) => void;
+}) {
+  return (
+    <section className="profile-documents-panel">
+      <div className="profile-gallery-heading">
+        <strong>{t.documents}</strong>
+        <label className="icon-upload-button" title={t.addPdf} aria-label={t.addPdf}>
+          <Paperclip size={16} />
+          <input
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={(event) => {
+              onAddDocument(event.target.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+      </div>
+      {documents.length === 0 ? (
+        <p>{t.noDocuments}</p>
+      ) : (
+        <div className="person-document-list">
+          {documents.map((document) => (
+            <article key={document.id} className="person-document-card">
+              <Paperclip size={17} />
+              <span>
+                <strong>{document.title || document.fileName}</strong>
+                <small>{document.fileName}</small>
+              </span>
+              <a href={document.dataUrl} target="_blank" rel="noreferrer" title={t.openDocument} aria-label={t.openDocument}>
+                <SquareArrowOutUpRight size={15} />
+              </a>
+              <button type="button" title={t.deletePhoto} aria-label={t.deletePhoto} onClick={() => onRemoveDocument(document.id)}>
+                <Trash2 size={15} />
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4536,6 +4695,8 @@ function BirthMapView({
   const [mapMode, setMapMode] = useState<"people" | "photos" | "migrations">("people");
   const [mapStatus, setMapStatus] = useState("");
   const mapElementRef = useRef<HTMLDivElement>(null);
+  const onSelectRef = useRef(onSelect);
+  const tRef = useRef(t);
   const birthPlaceGroups = useMemo(() => {
     const groups = new Map<string, { label: string; people: Person[] }>();
 
@@ -4551,6 +4712,23 @@ function BirthMapView({
     return [...groups.values()];
   }, [people]);
   const locatedPhotos = useMemo(() => photos.filter(hasGalleryPhotoCoordinates), [photos]);
+  const birthPlaceSignature = useMemo(
+    () => birthPlaceGroups.map((group) => `${group.label}:${group.people.map((person) => person.id).sort().join(",")}`).join("|"),
+    [birthPlaceGroups]
+  );
+  const locatedPhotoSignature = useMemo(
+    () => locatedPhotos.map((photo) => `${photo.id}:${photo.latitude},${photo.longitude}`).sort().join("|"),
+    [locatedPhotos]
+  );
+  const relationshipSignature = useMemo(
+    () => relationships.map((relationship) => `${relationship.id}:${relationship.kind}:${relationship.fromPersonId}:${relationship.toPersonId}`).sort().join("|"),
+    [relationships]
+  );
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+    tRef.current = t;
+  }, [onSelect, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4559,18 +4737,18 @@ function BirthMapView({
     async function drawMap() {
       if (!mapElementRef.current) return;
 
-      setMapStatus(t.loadingMap);
+      setMapStatus(tRef.current.loadingMap);
       mapElementRef.current.innerHTML = "";
 
       try {
         if (mapMode === "photos") {
           if (locatedPhotos.length === 0) {
-            setMapStatus(t.galleryMapNoLocatedPhotos);
+            setMapStatus(tRef.current.galleryMapNoLocatedPhotos);
             return;
           }
 
           if (cancelled || !mapElementRef.current) return;
-          mapInstance = await drawLeafletPhotoMap(mapElementRef.current, locatedPhotos, t);
+          mapInstance = await drawLeafletPhotoMap(mapElementRef.current, locatedPhotos, tRef.current);
           if (!cancelled) setMapStatus("");
           return;
         }
@@ -4580,7 +4758,7 @@ function BirthMapView({
           if (cancelled) return;
 
           if (migrationMapData.groups.length === 0) {
-            setMapStatus(t.noMapLocationsHint);
+            setMapStatus(tRef.current.noMapLocationsHint);
             return;
           }
 
@@ -4606,16 +4784,16 @@ function BirthMapView({
         }
 
         if (nextLocatedGroups.length === 0) {
-          setMapStatus(t.noMapLocationsHint);
+          setMapStatus(tRef.current.noMapLocationsHint);
           return;
         }
 
         if (cancelled || !mapElementRef.current) return;
 
-        mapInstance = await drawLeafletBirthMap(mapElementRef.current, nextLocatedGroups, showPhotos, onSelect);
+        mapInstance = await drawLeafletBirthMap(mapElementRef.current, nextLocatedGroups, showPhotos, (person) => onSelectRef.current(person));
         if (!cancelled) setMapStatus("");
       } catch {
-        setMapStatus(t.openStreetMapLoadError);
+        setMapStatus(tRef.current.openStreetMapLoadError);
       }
     }
 
@@ -4625,7 +4803,7 @@ function BirthMapView({
       cancelled = true;
       mapInstance?.remove();
     };
-  }, [birthPlaceGroups, locatedPhotos, mapMode, onSelect, people, relationships, showPhotos, t]);
+  }, [birthPlaceGroups, birthPlaceSignature, locatedPhotos, locatedPhotoSignature, mapMode, people, relationshipSignature, relationships, showPhotos]);
 
   return (
     <section className="map-view">
@@ -6115,6 +6293,12 @@ function GalleryView({
               />
             </aside>
           </div>
+          <footer className="modal-footer">
+            <button className="primary-action" type="button" onClick={() => setEditingPhotoId("")}>
+              <Check size={17} />
+              <span>{t.save}</span>
+            </button>
+          </footer>
         </section>
       </div>
     ) : null}
@@ -6451,7 +6635,7 @@ function FamilyHistoryTimeline({
           const spainEntries = await fetchWikipediaSpainYearHistoryEntries(
             selectedYear,
             selectedCacheKey,
-            selectedEvent.date.getMonth() + 1
+            selectedEvent.date
           ).catch(() => []);
           entries = mergeWorldHistoryEntries([...entries, ...spainEntries, ...yearEntries], selectedYear).slice(0, 8);
         }
@@ -6768,9 +6952,9 @@ async function fetchWikipediaYearHistoryEntries(
 async function fetchWikipediaSpainYearHistoryEntries(
   year: number,
   dateKey: string,
-  preferredMonth?: number
+  selectedDate?: Date
 ): Promise<WorldHistoryEntry[]> {
-  const pageTitle = `Anexo:España_en_${year}`;
+  const pageTitle = `Anexo:Espa\u00f1a_en_${year}`;
   const sourceUrl = `https://es.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
   const apiUrl = `https://es.wikipedia.org/w/api.php?action=parse&format=json&origin=*&page=${encodeURIComponent(
     pageTitle
@@ -6783,8 +6967,7 @@ async function fetchWikipediaSpainYearHistoryEntries(
 
   const document = new DOMParser().parseFromString(html, "text/html");
   const items = collectWikipediaSpainYearListItems(document);
-  const monthItems = preferredMonth ? items.filter((item) => item.month === preferredMonth) : [];
-  const primaryItems = monthItems.length ? monthItems : items;
+  const primaryItems = selectedDate ? selectClosestHistoricalItems(items, selectedDate, 4) : items;
 
   return dedupeHistoricalItems(primaryItems)
     .slice(0, 4)
@@ -6842,9 +7025,9 @@ function collectWikipediaYearListItems(document: Document) {
 }
 
 function collectWikipediaSpainYearListItems(document: Document) {
-  const items: Array<{ text: string; month?: number }> = [];
+  const items: Array<{ text: string; month?: number; day?: number }> = [];
   let currentMonth: number | undefined;
-  let isEventSection = false;
+  let isEventsSection = false;
   const nodes = Array.from(document.body.querySelectorAll("h2, h3, h4, ul"));
 
   nodes.forEach((node) => {
@@ -6853,17 +7036,17 @@ function collectWikipediaSpainYearListItems(document: Document) {
       const month = getSpanishMonthNumberFromText(node.textContent ?? "");
       if (month) currentMonth = month;
       if (node.tagName === "H2") {
-        isEventSection = isWikipediaSpainEventsHeading(heading);
+        isEventsSection = heading.includes("acontecimientos");
         if (!month) currentMonth = undefined;
       } else if (month) {
-        isEventSection = true;
+        isEventsSection = isEventsSection && !isWikipediaSpainNonEventHeading(heading);
       } else if (isWikipediaSpainNonEventHeading(heading)) {
-        isEventSection = false;
+        isEventsSection = false;
       }
       return;
     }
 
-    if (node.tagName !== "UL" || !isEventSection) return;
+    if (node.tagName !== "UL" || !isEventsSection) return;
     Array.from(node.children)
       .filter((child) => child.tagName === "LI")
       .forEach((child) => {
@@ -6872,12 +7055,40 @@ function collectWikipediaSpainYearListItems(document: Document) {
         if (!text || !isUsefulWorldHistoryText(text)) return;
         items.push({
           text,
-          month: extractHistoricalItemMonth(rawText) ?? currentMonth
+          month: extractHistoricalItemMonth(rawText) ?? currentMonth,
+          day: extractHistoricalItemDay(rawText)
         });
       });
   });
 
   return items;
+}
+
+function selectClosestHistoricalItems<T extends { text: string; month?: number; day?: number }>(
+  items: T[],
+  selectedDate: Date,
+  limit: number
+) {
+  const selectedDayOfYear = getDayOfYear(selectedDate.getMonth() + 1, selectedDate.getDate());
+  return dedupeHistoricalItems(items)
+    .slice()
+    .sort((first, second) => {
+      const firstDistance = getHistoricalDateDistance(first, selectedDate, selectedDayOfYear);
+      const secondDistance = getHistoricalDateDistance(second, selectedDate, selectedDayOfYear);
+      if (firstDistance !== secondDistance) return firstDistance - secondDistance;
+      return first.text.length - second.text.length;
+    })
+    .slice(0, limit);
+}
+
+function getHistoricalDateDistance(item: { month?: number; day?: number }, selectedDate: Date, selectedDayOfYear: number) {
+  if (item.month && item.day) {
+    return Math.abs(getDayOfYear(item.month, item.day) - selectedDayOfYear);
+  }
+  if (item.month) {
+    return Math.abs(item.month - (selectedDate.getMonth() + 1)) * 31 + 15;
+  }
+  return 999;
 }
 
 function isWikipediaSpainEventsHeading(heading: string) {
@@ -6953,6 +7164,19 @@ function extractHistoricalItemMonth(value: string) {
   const normalized = normalizePlainText(value);
   const match = normalized.match(/^\d{1,2}\s+de\s+([a-z]+)/);
   return match ? getSpanishMonthNumberFromText(match[1]) : undefined;
+}
+
+function extractHistoricalItemDay(value: string) {
+  const normalized = normalizePlainText(value);
+  const match = normalized.match(/^(\d{1,2})\s+de\s+[a-z]+/);
+  if (!match) return undefined;
+  const day = Number(match[1]);
+  return day >= 1 && day <= 31 ? day : undefined;
+}
+
+function getDayOfYear(month: number, day: number) {
+  const daysBeforeMonth = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  return (daysBeforeMonth[month - 1] ?? 0) + day;
 }
 
 function getSpanishMonthNumberFromText(value: string) {
@@ -7940,7 +8164,7 @@ function parsePublicPageMetadata(html: string, sourceUrl: string): PublicInfoPre
     readMeta('meta[property="og:image"]') ||
     readMeta('meta[name="twitter:image"]') ||
     document.querySelector<HTMLImageElement>("img")?.src?.trim() ||
-    "";
+    getPublicMetadataFallbackImageUrl(sourceUrl);
 
   return {
     title: cleanSearchText(title),
@@ -7971,6 +8195,14 @@ function resolvePublicAssetUrl(assetUrl: string, sourceUrl: string) {
   }
 }
 
+function getPublicMetadataFallbackImageUrl(sourceUrl: string) {
+  try {
+    return `${new URL(sourceUrl).origin}/favicon.ico`;
+  } catch {
+    return "";
+  }
+}
+
 function proxifyPublicImageUrl(imageUrl: string) {
   const trimmed = imageUrl.trim();
   if (!trimmed || trimmed.startsWith("/public-image?")) return trimmed;
@@ -7982,7 +8214,7 @@ function getPublicPreviewFallbackLabel(sourceUrl: string) {
   try {
     return new URL(sourceUrl).hostname.replace(/^www\./, "").slice(0, 2).toUpperCase();
   } catch {
-    return "↗";
+    return "→";
   }
 }
 
@@ -8730,8 +8962,8 @@ function splitPlace(place = "", storedCity = "", storedCountry = "") {
 
   if (place && !place.includes(",")) {
     return {
-      city: "",
-      country: place.trim()
+      city: place.trim(),
+      country: ""
     };
   }
 
@@ -8782,7 +9014,7 @@ async function geocodeOpenStreetMap(address: string): Promise<GeocodeResult | nu
     const parsed = JSON.parse(cached) as { lat: number; lng: number; communityCode?: string; coords?: { lat: number; lng: number } };
     const coords = parsed.coords ?? { lat: parsed.lat, lng: parsed.lng };
     const cachedCommunityCode = parsed.communityCode ?? localStorage.getItem(`opentree.region.osm.${normalizedAddress}`) ?? undefined;
-    if (cachedCommunityCode) {
+    if (Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
       return {
         coords,
         communityCode: cachedCommunityCode,
@@ -9449,13 +9681,46 @@ async function fetchForebearsSurnameStats(surname: string): Promise<NonNullable<
 }
 
 async function fetchForebearsHtml(path: string): Promise<string> {
+  const sourceUrl = `https://forebears.io${path}`;
+  const attempts: Array<() => Promise<string>> = [];
+
   if ("__TAURI_INTERNALS__" in window) {
-    return invoke<string>("fetch_forebears_html", { path });
+    attempts.push(() => invoke<string>("fetch_forebears_html", { path }));
+  } else {
+    attempts.push(async () => {
+      const response = await fetch(`/forebears-api${path}`);
+      if (!response.ok) throw new Error(`Forebears request failed: ${response.status}`);
+      return response.text();
+    });
   }
 
-  const response = await fetch(`/forebears-api${path}`);
-  if (!response.ok) throw new Error(`Forebears request failed: ${response.status}`);
-  return response.text();
+  attempts.push(
+    async () => {
+      const response = await fetch(`https://r.jina.ai/http://${sourceUrl.replace(/^https?:\/\//, "")}`);
+      if (!response.ok) throw new Error(`Forebears reader request failed: ${response.status}`);
+      return response.text();
+    },
+    async () => {
+      const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(sourceUrl)}`);
+      if (!response.ok) throw new Error(`Forebears fallback request failed: ${response.status}`);
+      return response.text();
+    }
+  );
+
+  let lastError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      const html = await attempt();
+      if (html && !/Just a moment|Enable JavaScript and cookies|cf_chl/i.test(html)) {
+        return html;
+      }
+      lastError = new Error("Forebears returned a blocking page");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("Forebears request failed");
 }
 
 async function fetchGeneanetHtml(path: string): Promise<string> {
@@ -9560,14 +9825,18 @@ function parseForebearsSurnameHtml(
 
   const document = new DOMParser().parseFromString(html, "text/html");
   const text = document.body.textContent?.replace(/\u00a0/g, " ") ?? "";
-  const normalizedText = text.replace(/[ \t]+/g, " ");
-  const countries = extractForebearsCountryRows(text);
-  const rankMatch = normalizedText.match(/([\d,]+)(?:st|nd|rd|th)\s+Most Common/i);
-  const totalMatch = normalizedText.match(/Approximately\s+([\d,]+)\s+people bear this surname/i);
+  const normalizedText = (text || html).replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ");
+  const countries = extractForebearsCountryRows(normalizedText);
+  const rankMatch =
+    normalizedText.match(/([\d,]+)(?:st|nd|rd|th)\s+Most Common/i) ||
+    normalizedText.match(/World Rank\s*#?\s*([\d,]+)/i) ||
+    normalizedText.match(/Rank\s*#?\s*([\d,]+)/i);
+  const totalMatch =
+    normalizedText.match(/Approximately\s+([\d,]+)\s+people bear this surname/i) ||
+    normalizedText.match(/Global Incidence\s*([\d,]+)/i) ||
+    normalizedText.match(/Incidence\s*([\d,]+)/i);
   const mostPrevalentCountry = extractForebearsCountryAfterLabel(normalizedText, "Most prevalent in:");
   const highestDensityCountry = extractForebearsCountryAfterLabel(normalizedText, "Highest density in:");
-  const prevalentMatch = normalizedText.match(/Most prevalent in:\s*([A-Za-zÀ-ÿ .'-]+)/i);
-  const densityMatch = normalizedText.match(/Highest density in:\s*([A-Za-zÀ-ÿ .'-]+)/i);
 
   if (!totalMatch && countries.length === 0) {
     throw new Error("Forebears surname data not found");
@@ -9588,7 +9857,7 @@ function parseForebearsSurnameHtml(
 
 function extractForebearsCountryRows(text: string) {
   const rows: NonNullable<SurnameProfile["forebears"]>["countries"] = [];
-  const rowPattern = /^([A-Za-zÀ-ÿ .'-]+?)\s+([\d,]+)\s+(1:[\d,]+)\s+([\d,]+)$/gm;
+    const rowPattern = /^([A-Za-zÀ-ÿ .'-]+?)\s+([\d,]+)\s+(1:[\d,]+)\s+([\d,]+)$/gm;
   let match: RegExpExecArray | null;
 
   while ((match = rowPattern.exec(text)) && rows.length < 20) {
@@ -9628,7 +9897,7 @@ function cleanCountryName(value?: string) {
 
   if (match) return match;
 
-  const readableCountry = cleanedValue.match(/^[A-Za-zÀ-ÿ .'-]+/)?.[0]?.trim() ?? "";
+    const readableCountry = cleanedValue.match(/^[A-Za-zÀ-ÿ .'-]+/)?.[0]?.trim() ?? "";
   return readableCountry.replace(/[.,;:]+$/, "");
 }
 
@@ -11273,3 +11542,5 @@ function escapeHtml(value: string) {
     return entities[character];
   });
 }
+
+

@@ -179,6 +179,13 @@ function sanitizeGuestProject(proposedProject, currentProject) {
   };
 }
 
+function composeGuestProject(currentProject, sessionToken) {
+  if (!currentProject || !sessionToken) return currentProject;
+  return loadPendingChanges()
+    .filter((change) => change.role === "guest" && change.sessionToken === sessionToken)
+    .reduce((project, change) => applyPendingChangeToProject(project, change), currentProject);
+}
+
 function mergeById(currentItems, proposedItems) {
   const merged = new Map();
   currentItems.forEach((item) => merged.set(item.id, item));
@@ -204,6 +211,281 @@ function summarizeProjectChange(currentProject, proposedProject) {
     (proposedProject?.relationships?.length || 0) - (currentProject?.relationships?.length || 0)
   );
   return { addedPeople, editedPeople, addedPhotos, relationshipDelta };
+}
+
+function buildAtomicPendingChanges(currentProject, proposedProject, sessionToken, existingChanges = []) {
+  const createdAtByKey = new Map(
+    existingChanges
+      .filter((change) => change.sessionToken === sessionToken)
+      .map((change) => [getPendingChangeKey(change), change.createdAt])
+  );
+  const currentPeople = new Map((currentProject?.people || []).map((person) => [person.id, person]));
+  const proposedPeople = new Map((proposedProject?.people || []).map((person) => [person.id, person]));
+  const currentRelationships = new Map((currentProject?.relationships || []).map((relationship) => [relationship.id, relationship]));
+  const proposedRelationships = new Map((proposedProject?.relationships || []).map((relationship) => [relationship.id, relationship]));
+  const currentPhotos = new Map((currentProject?.galleryPhotos || []).map((photo) => [photo.id, photo]));
+  const proposedPhotos = new Map((proposedProject?.galleryPhotos || []).map((photo) => [photo.id, photo]));
+  const changes = [];
+
+  proposedPeople.forEach((person, id) => {
+    const current = currentPeople.get(id);
+    if (!current) {
+      changes.push(createAtomicPendingChange({
+        kind: "add_person",
+        entityType: "person",
+        entityId: id,
+        sessionToken,
+        payload: person,
+        currentProject,
+        createdAtByKey,
+        title: `Nueva persona: ${formatPersonName(person)}`,
+        details: describePerson(person),
+        summary: { addedPeople: 1, editedPeople: 0, addedPhotos: 0, relationshipDelta: 0 }
+      }));
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(person)) {
+      changes.push(createAtomicPendingChange({
+        kind: "edit_person",
+        entityType: "person",
+        entityId: id,
+        sessionToken,
+        payload: person,
+        currentProject,
+        createdAtByKey,
+        title: `Edición de persona: ${formatPersonName(person)}`,
+        details: describeObjectDiff(current, person, personFieldLabels),
+        summary: { addedPeople: 0, editedPeople: 1, addedPhotos: 0, relationshipDelta: 0 }
+      }));
+    }
+  });
+
+  proposedRelationships.forEach((relationship, id) => {
+    const current = currentRelationships.get(id);
+    if (!current) {
+      changes.push(createAtomicPendingChange({
+        kind: "add_relationship",
+        entityType: "relationship",
+        entityId: id,
+        sessionToken,
+        payload: relationship,
+        currentProject,
+        createdAtByKey,
+        title: `Nueva relación: ${formatRelationship(relationship, proposedProject)}`,
+        details: describeRelationship(relationship, proposedProject),
+        summary: { addedPeople: 0, editedPeople: 0, addedPhotos: 0, relationshipDelta: 1 }
+      }));
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(relationship)) {
+      changes.push(createAtomicPendingChange({
+        kind: "edit_relationship",
+        entityType: "relationship",
+        entityId: id,
+        sessionToken,
+        payload: relationship,
+        currentProject,
+        createdAtByKey,
+        title: `Edición de relación: ${formatRelationship(relationship, proposedProject)}`,
+        details: describeObjectDiff(current, relationship, relationshipFieldLabels),
+        summary: { addedPeople: 0, editedPeople: 0, addedPhotos: 0, relationshipDelta: 1 }
+      }));
+    }
+  });
+
+  proposedPhotos.forEach((photo, id) => {
+    const current = currentPhotos.get(id);
+    if (!current) {
+      changes.push(createAtomicPendingChange({
+        kind: "add_photo",
+        entityType: "photo",
+        entityId: id,
+        sessionToken,
+        payload: photo,
+        currentProject,
+        createdAtByKey,
+        title: `Nueva foto: ${photo.title || photo.fileName || "Sin título"}`,
+        details: describePhoto(photo, proposedProject),
+        summary: { addedPeople: 0, editedPeople: 0, addedPhotos: 1, relationshipDelta: 0 }
+      }));
+      return;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(photo)) {
+      changes.push(createAtomicPendingChange({
+        kind: "edit_photo",
+        entityType: "photo",
+        entityId: id,
+        sessionToken,
+        payload: photo,
+        currentProject,
+        createdAtByKey,
+        title: `Edición de foto: ${photo.title || photo.fileName || "Sin título"}`,
+        details: describeObjectDiff(current, photo, photoFieldLabels),
+        summary: { addedPeople: 0, editedPeople: 0, addedPhotos: 0, relationshipDelta: 0 }
+      }));
+    }
+  });
+
+  return changes;
+}
+
+function createAtomicPendingChange({
+  kind,
+  entityType,
+  entityId,
+  sessionToken,
+  payload,
+  currentProject,
+  createdAtByKey,
+  title,
+  details,
+  summary
+}) {
+  const key = `${kind}:${entityId}`;
+  const atomic = { kind, entityType, entityId, payload };
+  const change = {
+    id: createId("guest-change"),
+    status: "pending",
+    role: "guest",
+    sessionToken,
+    kind,
+    entityType,
+    entityId,
+    title,
+    details: details.filter(Boolean),
+    summary,
+    atomic,
+    createdAt: createdAtByKey.get(key) || now(),
+    updatedAt: now()
+  };
+  return {
+    ...change,
+    proposedProject: applyPendingChangeToProject(currentProject, change)
+  };
+}
+
+function getPendingChangeKey(change) {
+  return `${change.kind || "project_snapshot"}:${change.entityId || change.id}`;
+}
+
+function applyPendingChangeToProject(project, change) {
+  if (!project || !change?.atomic) return change?.proposedProject || project;
+  const nextProject = structuredClone(project);
+  const payload = change.atomic.payload;
+  if (change.entityType === "person") {
+    nextProject.people = upsertById(nextProject.people || [], payload);
+  }
+  if (change.entityType === "relationship") {
+    nextProject.relationships = upsertById(nextProject.relationships || [], payload);
+  }
+  if (change.entityType === "photo") {
+    nextProject.galleryPhotos = upsertById(nextProject.galleryPhotos || [], payload);
+  }
+  return { ...nextProject, updatedAt: now() };
+}
+
+function upsertById(items, payload) {
+  const exists = items.some((item) => item.id === payload.id);
+  return exists ? items.map((item) => (item.id === payload.id ? payload : item)) : [...items, payload];
+}
+
+const personFieldLabels = {
+  givenName: "Nombre",
+  familyName: "Apellidos",
+  gender: "Sexo",
+  birthDate: "Fecha de nacimiento",
+  birthTime: "Hora de nacimiento",
+  birthCity: "Ciudad de nacimiento",
+  birthCountry: "País de nacimiento",
+  birthPlace: "Lugar de nacimiento",
+  isDeceased: "Fallecido",
+  deathDate: "Fecha de fallecimiento",
+  photoUrl: "Foto",
+  clinicalConditionIds: "Enfermedades vinculadas",
+  publicInfoLinks: "Hemeroteca"
+};
+
+const relationshipFieldLabels = {
+  kind: "Tipo",
+  fromPersonId: "Persona origen",
+  toPersonId: "Persona destino",
+  startDate: "Fecha de inicio",
+  endDate: "Fecha de fin"
+};
+
+const photoFieldLabels = {
+  title: "Título",
+  takenAt: "Fecha",
+  location: "Ubicación",
+  latitude: "Latitud",
+  longitude: "Longitud",
+  personIds: "Personas etiquetadas",
+  faceRegions: "Caras marcadas"
+};
+
+function describeObjectDiff(current, proposed, labels) {
+  return Object.keys(labels)
+    .filter((key) => JSON.stringify(current?.[key] ?? null) !== JSON.stringify(proposed?.[key] ?? null))
+    .map((key) => `${labels[key]}: ${formatChangeValue(current?.[key])} → ${formatChangeValue(proposed?.[key])}`);
+}
+
+function describePerson(person) {
+  return [
+    person.givenName || person.familyName ? `Nombre: ${formatPersonName(person)}` : "",
+    person.birthDate ? `Nacimiento: ${person.birthDate}` : "",
+    person.birthCity || person.birthCountry ? `Lugar: ${[person.birthCity, person.birthCountry].filter(Boolean).join(", ")}` : "",
+    person.gender && person.gender !== "unknown" ? `Sexo: ${person.gender}` : ""
+  ];
+}
+
+function describeRelationship(relationship, project) {
+  return [
+    `Tipo: ${formatRelationshipKind(relationship.kind)}`,
+    `Personas: ${formatPersonNameById(project, relationship.fromPersonId)} y ${formatPersonNameById(project, relationship.toPersonId)}`,
+    relationship.startDate ? `Inicio: ${relationship.startDate}` : ""
+  ];
+}
+
+function describePhoto(photo, project) {
+  const people = (photo.personIds || []).map((id) => formatPersonNameById(project, id)).join(", ");
+  return [
+    photo.takenAt ? `Fecha: ${photo.takenAt}` : "",
+    photo.location ? `Ubicación: ${photo.location}` : "",
+    people ? `Personas: ${people}` : ""
+  ];
+}
+
+function formatRelationship(relationship, project) {
+  return `${formatPersonNameById(project, relationship.fromPersonId)} · ${formatPersonNameById(project, relationship.toPersonId)}`;
+}
+
+function formatRelationshipKind(kind) {
+  const labels = {
+    parent_child: "Padre/madre e hijo/a",
+    partner: "Pareja",
+    spouse: "Matrimonio",
+    former_spouse: "Relación anterior",
+    adoptive_parent: "Padre/madre adoptivo/a",
+    guardian: "Tutor/a"
+  };
+  return labels[kind] || kind || "Relación";
+}
+
+function formatPersonNameById(project, id) {
+  const person = (project?.people || []).find((candidate) => candidate.id === id);
+  return person ? formatPersonName(person) : "Persona no registrada";
+}
+
+function formatPersonName(person) {
+  return [person?.givenName, person?.familyName].filter(Boolean).join(" ").trim() || "Sin nombre";
+}
+
+function formatChangeValue(value) {
+  if (value === undefined || value === null || value === "") return "sin dato";
+  if (typeof value === "boolean") return value ? "sí" : "no";
+  if (Array.isArray(value)) return value.length ? `${value.length} elemento(s)` : "sin elementos";
+  if (typeof value === "object") return "contenido actualizado";
+  return String(value);
 }
 
 function getSession(request) {
@@ -262,14 +544,11 @@ function readBody(request) {
 function bootstrapPayload(session) {
   const role = session?.role || null;
   const pendingChanges = role === "admin" ? loadPendingChanges() : [];
-  const guestPendingChange =
-    role === "guest" && session?.token
-      ? loadPendingChanges().find((change) => change.role === "guest" && change.sessionToken === session.token)
-      : null;
+  const project = role === "guest" && session?.token ? composeGuestProject(loadProject(), session.token) : loadProject();
   return {
     authenticated: Boolean(role),
     role,
-    project: role ? guestPendingChange?.proposedProject || loadProject() : null,
+    project: role ? project : null,
     settings: config.settings,
     pendingProjectChanges: pendingChanges
   };
@@ -326,22 +605,10 @@ async function handleApi(request, response, pathname) {
     }
 
     const pendingChanges = loadPendingChanges();
-    const existingGuestChange = pendingChanges.find(
-      (candidate) => candidate.role === "guest" && candidate.sessionToken === session.token
-    );
-    const nextChange = {
-      id: existingGuestChange?.id || createId("guest-change"),
-      status: "pending",
-      role: "guest",
-      sessionToken: session.token,
-      summary: summarizeProjectChange(currentProject, sanitizedProject),
-      proposedProject: sanitizedProject,
-      createdAt: existingGuestChange?.createdAt || now(),
-      updatedAt: now()
-    };
+    const nextGuestChanges = buildAtomicPendingChanges(currentProject, sanitizedProject, session.token, pendingChanges);
     savePendingChanges([
-      ...pendingChanges.filter((candidate) => candidate.id !== nextChange.id),
-      nextChange
+      ...pendingChanges.filter((candidate) => !(candidate.role === "guest" && candidate.sessionToken === session.token)),
+      ...nextGuestChanges
     ]);
     return sendJson(response, 202, { status: "pending", project: sanitizedProject });
   }
@@ -355,7 +622,7 @@ async function handleApi(request, response, pathname) {
     const pendingChanges = loadPendingChanges();
     const change = pendingChanges.find((candidate) => candidate.id === id);
     if (!change) return sendJson(response, 404, { error: "NOT_FOUND" });
-    const savedProject = saveProject(change.proposedProject);
+    const savedProject = saveProject(applyPendingChangeToProject(loadProject(), change));
     const remaining = pendingChanges.filter((candidate) => candidate.id !== id);
     savePendingChanges(remaining);
     return sendJson(response, 200, { project: savedProject, pendingProjectChanges: remaining });
@@ -607,7 +874,8 @@ function parsePublicMetadata(html, sourceUrl) {
     readHtmlMeta(html, "property", "og:image:secure_url") ||
     readHtmlMeta(html, "name", "twitter:image") ||
     readHtmlMeta(html, "name", "twitter:image:src") ||
-    readHtmlFirstImage(html);
+    readHtmlFirstImage(html) ||
+    getPublicMetadataFallbackImageUrl(sourceUrl);
 
   return {
     title: cleanHtmlText(title),
@@ -661,6 +929,15 @@ function resolvePublicMetadataAssetUrl(assetUrl, sourceUrl) {
 
 function proxyPublicMetadataImageUrl(imageUrl) {
   return imageUrl ? `/public-image?url=${encodeURIComponent(imageUrl)}` : "";
+}
+
+function getPublicMetadataFallbackImageUrl(sourceUrl) {
+  try {
+    const url = new URL(sourceUrl);
+    return `${url.origin}/favicon.ico`;
+  } catch {
+    return "";
+  }
 }
 
 function cleanHtmlText(value) {

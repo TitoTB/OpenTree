@@ -1,7 +1,7 @@
 import type { Person, PersonId, Relationship } from "../domain/types";
 
 export interface TreeNode {
-  person: Person;
+  person: Person | null;
   partners: Person[];
   children: TreeNode[];
 }
@@ -18,11 +18,22 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
       .map((relationship) => relationship.toPersonId)
   );
   const rootPerson = rootId ? peopleById.get(rootId) : undefined;
-  const root = rootPerson ?? getBestRoot(people, relationships, peopleWithParents);
-  if (!root) return null;
-
   const coveredIds = new Set<PersonId>();
-  return walk(root, new Set<PersonId>(), coveredIds);
+  if (rootPerson) return walk(rootPerson, new Set<PersonId>(), coveredIds);
+
+  const roots = getRootCandidates(people, relationships, peopleWithParents)
+    .map((person) => ({
+      person,
+      score: countReachableFamily(person.id, relationships, new Set<PersonId>())
+    }))
+    .sort((first, second) => second.score - first.score || comparePeopleByBirthDate(first.person, second.person))
+    .map(({ person }) => person)
+    .map((person) => walk(person, new Set<PersonId>(), coveredIds))
+    .filter((node) => node.person || node.children.length > 0);
+
+  if (roots.length === 0) return null;
+  if (roots.length === 1) return roots[0];
+  return { person: null, partners: [], children: roots };
 
   function walk(person: Person, path: Set<PersonId>, covered: Set<PersonId>): TreeNode {
     covered.add(person.id);
@@ -37,8 +48,8 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
           (relationship.fromPersonId === person.id || partnerIds.includes(relationship.fromPersonId))
       )
       .map((relationship) => peopleById.get(relationship.toPersonId))
-      .filter((child): child is Person => Boolean(child))
-      .filter((child, index, all) => all.findIndex((candidate) => candidate.id === child.id) === index)
+        .filter((child): child is Person => Boolean(child))
+        .filter((child, index, all) => all.findIndex((candidate) => candidate.id === child.id) === index)
       .filter((child) => path.has(child.id) || !covered.has(child.id))
       .sort(comparePeopleByBirthDate)
       .map((child) =>
@@ -56,19 +67,12 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
   }
 }
 
-function getBestRoot(people: Person[], relationships: Relationship[], peopleWithParents: Set<PersonId>) {
+function getRootCandidates(people: Person[], relationships: Relationship[], peopleWithParents: Set<PersonId>) {
   const parentlessPeople = people.filter(
     (person) => !peopleWithParents.has(person.id) && !isExternalPartnerRoot(person.id, relationships, peopleWithParents)
   );
   const parentlessFallback = people.filter((person) => !peopleWithParents.has(person.id));
-  const candidates = parentlessPeople.length > 0 ? parentlessPeople : parentlessFallback.length > 0 ? parentlessFallback : people;
-
-  return candidates
-    .map((person) => ({
-      person,
-      score: countReachableFamily(person.id, relationships, new Set<PersonId>())
-    }))
-    .sort((first, second) => second.score - first.score)[0]?.person ?? null;
+  return parentlessPeople.length > 0 ? parentlessPeople : parentlessFallback.length > 0 ? parentlessFallback : people;
 }
 
 function isExternalPartnerRoot(
