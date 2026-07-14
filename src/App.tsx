@@ -2941,8 +2941,7 @@ function PersonProfile({
   const partnerRelationships = getPartnerRelationshipsForPerson(person.id, people, relationships);
   const linkedGalleryPhotos = galleryPhotos
     .filter((photo) => photo.personIds.includes(person.id))
-    .sort(compareGalleryPhotos)
-    .slice(0, 3);
+    .sort(compareGalleryPhotosChronological);
 
   return (
     <div className="profile-readonly">
@@ -3023,16 +3022,11 @@ function PersonProfile({
                   <Image size={16} />
                 </button>
               </div>
-              <div className="profile-gallery-list">
-                {linkedGalleryPhotos.map((photo) => (
-                  <button type="button" key={photo.id} onClick={() => onSetPersonPhotoFromGallery(photo, person.id)}>
-                    <span className="profile-gallery-thumb" style={{ backgroundImage: `url(${photo.dataUrl})` }}>
-                      <span>{t.useAsProfilePhoto}</span>
-                    </span>
-                    <span>{photo.title || photo.fileName || t.galleryPhoto}</span>
-                  </button>
-                ))}
-              </div>
+              <ProfileGallerySlideshow
+                photos={linkedGalleryPhotos}
+                t={t}
+                onSetPersonPhoto={(photo) => onSetPersonPhotoFromGallery(photo, person.id)}
+              />
             </section>
           ) : null}
           <PersonDocumentsPanel
@@ -3118,6 +3112,52 @@ function PersonDocumentsPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function ProfileGallerySlideshow({
+  photos,
+  t,
+  onSetPersonPhoto
+}: {
+  photos: GalleryPhoto[];
+  t: Record<string, string>;
+  onSetPersonPhoto: (photo: GalleryPhoto) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [photos.map((photo) => photo.id).join("|")]);
+
+  useEffect(() => {
+    if (photos.length <= 1) return;
+    const interval = window.setInterval(() => {
+      setActiveIndex((current) => (current + 1) % photos.length);
+    }, 5200);
+    return () => window.clearInterval(interval);
+  }, [photos.length]);
+
+  const activePhoto = photos[activeIndex] ?? photos[0];
+  if (!activePhoto) return null;
+
+  return (
+    <div className="profile-gallery-slideshow">
+      <button className="profile-gallery-slideshow-frame" type="button" onClick={() => onSetPersonPhoto(activePhoto)}>
+        {photos.map((photo, index) => (
+          <img
+            key={photo.id}
+            className={index === activeIndex ? "active" : ""}
+            src={photo.dataUrl}
+            alt={photo.title || photo.fileName || t.galleryPhoto}
+            draggable={false}
+            style={{ objectPosition: getGalleryThumbnailFocus(photo) }}
+          />
+        ))}
+        <span className="profile-gallery-set-action">{t.useAsProfilePhoto}</span>
+        <span className="profile-gallery-year-badge">{getGalleryPhotoYear(activePhoto) || t.emptyValue}</span>
+      </button>
+    </div>
   );
 }
 
@@ -8887,10 +8927,18 @@ function compareGalleryPhotos(first: GalleryPhoto, second: GalleryPhoto) {
   return galleryDateTime(second) - galleryDateTime(first);
 }
 
+function compareGalleryPhotosChronological(first: GalleryPhoto, second: GalleryPhoto) {
+  return galleryDateTime(first) - galleryDateTime(second);
+}
+
 function galleryDateTime(photo: GalleryPhoto) {
   const year = extractYear(photo.takenAt);
   if (year) return year;
   return new Date(photo.createdAt).getTime() || 0;
+}
+
+function getGalleryPhotoYear(photo: GalleryPhoto) {
+  return extractYear(photo.takenAt) ?? extractYear(photo.createdAt);
 }
 
 function getGalleryYearBounds(photos: GalleryPhoto[]) {
