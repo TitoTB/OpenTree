@@ -118,7 +118,7 @@ export function TreeView({
           visiblePartnerConnectors.length > 0
             ? getCenteredRect(visiblePartnerConnectors.map((element) => element.getBoundingClientRect()))
             : coupleRect;
-        let parentX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
+        const relationshipX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
         const parentBottomY = toLocalY(parentAnchorRect.bottom - stageRect.top);
         const junctionY = toLocalY(childrenRect.top - stageRect.top);
         const childPoints = childAnchors.map((anchor) => {
@@ -135,20 +135,30 @@ export function TreeView({
             y: toLocalY(anchorRect.top - stageRect.top)
           };
         });
-        const singleAlignedChild = childPoints.length === 1 && Math.abs(parentX - childPoints[0].x) < 10;
+        const childCenterX = childPoints.reduce((total, point) => total + point.x, 0) / childPoints.length;
+        const singleAlignedChild = childPoints.length === 1 && Math.abs(childCenterX - childPoints[0].x) < 10;
         if (singleAlignedChild) {
           const childX = childPoints[0].x;
-          parentX = childX;
+          if (Math.abs(relationshipX - childX) > 0.5) {
+            nextConnectors.push({
+              d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} H ${formatCoord(childX)}`
+            });
+          }
           nextConnectors.push({
             d: `M ${formatCoord(childX)} ${formatCoord(parentBottomY)} V ${formatCoord(childPoints[0].y)}`
           });
           return;
         }
-        const horizontalXs = [parentX, ...childPoints.map((point) => point.x)];
+        const horizontalXs = [childCenterX, ...childPoints.map((point) => point.x)];
         const minX = Math.min(...horizontalXs);
         const maxX = Math.max(...horizontalXs);
 
-        nextConnectors.push({ d: `M ${formatCoord(parentX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
+        if (Math.abs(relationshipX - childCenterX) > 0.5) {
+          nextConnectors.push({
+            d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} H ${formatCoord(childCenterX)}`
+          });
+        }
+        nextConnectors.push({ d: `M ${formatCoord(childCenterX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
         if (maxX - minX > 0.5) {
           nextConnectors.push({ d: `M ${formatCoord(minX)} ${formatCoord(junctionY)} H ${formatCoord(maxX)}` });
         }
@@ -360,10 +370,6 @@ function TreeBranch({
   const hasChildren = node.children.length > 0;
   const sortedChildren = sortSiblingTreeNodes(node.children);
   const partnersOnLeft = externalSide === "left";
-  const partnerCount = node.partners.length;
-  const primaryHasParents = (parentCounts[person.id] ?? 0) > 0;
-  const hasExternalPartner = primaryHasParents && node.partners.some((partner) => (parentCounts[partner.id] ?? 0) === 0);
-  const coupleRowOffset = hasExternalPartner && partnerCount > 0 ? (partnersOnLeft ? -151 : 151) * Math.min(partnerCount, 1) : 0;
   const isPersonVisible = isTimelineVisible(person.id, visiblePersonIds);
   const partnerNodes = node.partners.map((partner) => {
     const relationshipStartDate = getPartnerRelationshipStartDate(person.id, partner.id, relationships);
@@ -401,12 +407,7 @@ function TreeBranch({
     <div
       className={`tree-branch ${hasChildren ? "has-children" : ""}`}
       data-tree-branch-id={branchKey}
-      style={
-        {
-          ...(rootGenerationOffset ? { marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } : {}),
-          "--couple-row-offset": `${coupleRowOffset}px`
-        } as CSSProperties
-      }
+      style={rootGenerationOffset ? ({ marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } as CSSProperties) : undefined}
     >
       <div className={`couple-row ${partnersOnLeft ? "partners-left" : ""}`}>
         {partnersOnLeft ? partnerNodes : null}
