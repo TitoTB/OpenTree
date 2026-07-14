@@ -6296,7 +6296,7 @@ button.calendar-day {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 40px;
+  gap: 24px;
   min-width: max-content;
 }
 
@@ -6319,7 +6319,8 @@ button.calendar-day {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  transform: translateX(var(--couple-row-offset, 0px));
 }
 
 .couple-row > * {
@@ -6327,18 +6328,10 @@ button.calendar-day {
   z-index: 1;
 }
 
-.couple-balance-spacer {
-  flex: 0 0 calc(var(--partner-spacer-count, 1) * 302px);
-  width: calc(var(--partner-spacer-count, 1) * 302px);
-  height: 1px;
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .couple-partner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .couple-partner.partner-left {
@@ -6470,7 +6463,7 @@ button.calendar-day {
 }
 
 .children-row {
-  --sibling-gap: 12px;
+  --sibling-gap: 8px;
   position: relative;
   display: flex;
   justify-content: center;

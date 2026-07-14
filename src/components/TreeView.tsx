@@ -361,6 +361,9 @@ function TreeBranch({
   const sortedChildren = sortSiblingTreeNodes(node.children);
   const partnersOnLeft = externalSide === "left";
   const partnerCount = node.partners.length;
+  const primaryHasParents = (parentCounts[person.id] ?? 0) > 0;
+  const hasExternalPartner = primaryHasParents && node.partners.some((partner) => (parentCounts[partner.id] ?? 0) === 0);
+  const coupleRowOffset = hasExternalPartner && partnerCount > 0 ? (partnersOnLeft ? -151 : 151) * Math.min(partnerCount, 1) : 0;
   const isPersonVisible = isTimelineVisible(person.id, visiblePersonIds);
   const partnerNodes = node.partners.map((partner) => {
     const relationshipStartDate = getPartnerRelationshipStartDate(person.id, partner.id, relationships);
@@ -401,13 +404,12 @@ function TreeBranch({
       style={
         {
           ...(rootGenerationOffset ? { marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } : {}),
-          "--partner-spacer-count": partnerCount
+          "--couple-row-offset": `${coupleRowOffset}px`
         } as CSSProperties
       }
     >
       <div className={`couple-row ${partnersOnLeft ? "partners-left" : ""}`}>
         {partnersOnLeft ? partnerNodes : null}
-        {!partnersOnLeft && partnerCount > 0 ? <span className="couple-balance-spacer" aria-hidden="true" /> : null}
         <TreePerson
           person={person}
           primaryAnchor
@@ -423,7 +425,6 @@ function TreeBranch({
           canAddParent={(parentCounts[person.id] ?? 0) < 2}
           flagPortraitUrl={flagBackgrounds?.[person.id]}
         />
-        {partnersOnLeft && partnerCount > 0 ? <span className="couple-balance-spacer" aria-hidden="true" /> : null}
         {!partnersOnLeft ? partnerNodes : null}
       </div>
       {sortedChildren.length > 0 ? (
