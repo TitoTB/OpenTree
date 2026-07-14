@@ -295,7 +295,7 @@ p {
   --muted: #a6b9b4;
 }
 
-.theme-dark :where(.rail, .wizard-shell, .surname-panel, .settings-field, .toggle-row, .person-modal, .contribution-card, .empty-state, .readonly-field, .profile-notes, .profile-gallery-panel, .profile-documents-panel, .relationship-date-panel, .map-panel, .calendar-month, .people-table, .surname-list button, .origin-suggestion, .source-box, .clinical-search-card, .clinical-linked-card, .clinical-condition-card, .clinical-auto-info, .public-search-card, .public-link-form, .public-link-list, .public-link-card, .condition-catalog-card, .gallery-filter-strip) {
+.theme-dark :where(.rail, .wizard-shell, .surname-panel, .settings-field, .toggle-row, .person-modal, .contribution-card, .empty-state, .readonly-field, .profile-notes, .profile-gallery-panel, .relationship-date-panel, .map-panel, .calendar-month, .people-table, .surname-list button, .origin-suggestion, .source-box, .clinical-search-card, .clinical-linked-card, .clinical-condition-card, .clinical-auto-info, .public-search-card, .public-link-form, .public-link-list, .public-link-card, .condition-catalog-card, .gallery-filter-strip) {
   background: rgba(23, 33, 31, 0.94);
   border-color: var(--line);
   color: #e7f3ef;
@@ -310,7 +310,7 @@ p {
   background-image: none;
 }
 
-.theme-dark :where(.canvas-header h1, .people-view-header h1, .surname-hero h2, .modal-header h2, .profile-identity h3, .readonly-field strong, .profile-gallery-heading > strong, .relationship-date-list span, .surname-panel h3, .calendar-month h2, .people-table-row, .contribution-card h2, .clinical-search-card strong, .clinical-linked-card > strong, .clinical-condition-card h4, .clinical-auto-info p, .public-search-card strong, .public-link-form > strong, .public-link-list > strong, .condition-catalog-card h2, .person-document-card strong) {
+.theme-dark :where(.canvas-header h1, .people-view-header h1, .surname-hero h2, .modal-header h2, .profile-identity h3, .readonly-field strong, .profile-gallery-heading > strong, .relationship-date-list span, .surname-panel h3, .calendar-month h2, .people-table-row, .contribution-card h2, .clinical-search-card strong, .clinical-linked-card > strong, .clinical-condition-card h4, .clinical-auto-info p, .public-search-card strong, .public-link-form > strong, .public-link-list > strong, .condition-catalog-card h2) {
   color: #eefaf6;
 }
 
@@ -430,6 +430,17 @@ p {
 
 .rail-actions button.has-pending-badge.active {
   background: #8f1d33;
+}
+
+.rail-actions button.rail-logout-button {
+  margin-top: 12px;
+  color: #7a1f2d;
+  background: #ffe9ed;
+}
+
+.rail-actions button.rail-logout-button:hover {
+  color: #fff;
+  background: #b4233c;
 }
 
 .rail-actions button .rail-badge {
@@ -1109,15 +1120,6 @@ button.zodiac-badge:hover {
   border: 1px solid var(--line);
 }
 
-.profile-documents-panel {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid var(--line);
-}
-
 .profile-gallery-heading {
   display: flex;
   align-items: center;
@@ -1293,62 +1295,6 @@ button.zodiac-badge:hover {
   to {
     transform: scale(1.045);
   }
-}
-
-.person-document-list {
-  display: grid;
-  gap: 8px;
-}
-
-.person-document-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid rgba(7, 95, 88, 0.12);
-  border-radius: 8px;
-  color: #25312e;
-  background: rgba(225, 243, 239, 0.48);
-}
-
-.person-document-card > svg {
-  color: #075f58;
-}
-
-.person-document-card span {
-  min-width: 0;
-}
-
-.person-document-card strong,
-.person-document-card small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.person-document-card strong {
-  font-size: 0.84rem;
-}
-
-.person-document-card small {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 800;
-}
-
-.person-document-card a,
-.person-document-card button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 8px;
-  color: #075f58;
-  background: var(--brand-soft);
 }
 
 .relationship-date-list {
@@ -3726,7 +3672,7 @@ button.zodiac-badge:hover {
 .ancestor-source-grid {
   display: grid;
   align-content: start;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 420px));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 16px;
   min-height: 0;
   overflow: auto;
@@ -3745,6 +3691,12 @@ button.zodiac-badge:hover {
   border: 1px solid var(--line);
   box-shadow: 0 18px 44px rgba(7, 95, 88, 0.08);
   text-align: left;
+}
+
+@media (min-width: 1180px) {
+  .ancestor-source-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .ancestor-source-badges {
@@ -6371,6 +6323,48 @@ button.calendar-day {
 
 .rings-icon circle {
   fill: none;
+}
+
+.relationship-date-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 6;
+  width: max-content;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid rgba(7, 95, 88, 0.2);
+  border-radius: 8px;
+  color: var(--brand-deep);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 12px 28px rgba(7, 58, 53, 0.14);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  white-space: nowrap;
+}
+
+.relationship-date-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid rgba(7, 95, 88, 0.2);
+  border-bottom: 1px solid rgba(7, 95, 88, 0.2);
+  background: inherit;
+  transform: translate(-50%, -4px) rotate(45deg);
+}
+
+.partner-connector:hover .relationship-date-tooltip,
+.partner-connector:focus-visible .relationship-date-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .tree-style-medieval .partner-connector {

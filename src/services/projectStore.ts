@@ -56,7 +56,9 @@ export function loadProject(): TreeProject | null {
   }
 
   try {
-    return JSON.parse(stored) as TreeProject;
+    const project = stripPersonDocuments(JSON.parse(stored) as TreeProject);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+    return project;
   } catch {
     window.localStorage.removeItem(STORAGE_KEY);
     return null;
@@ -70,14 +72,15 @@ export async function bootstrapProjectStore(): Promise<BootstrapState> {
     const data = (await response.json()) as Omit<BootstrapState, "serverMode">;
     serverMode = true;
     serverRole = data.role;
-    if (data.project) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data.project));
+    const project = data.project ? stripPersonDocuments(data.project) : null;
+    if (project) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
     }
     return {
       serverMode: true,
       authenticated: data.authenticated,
       role: data.role,
-      project: data.project,
+      project,
       settings: normalizeServerSettings(data.settings),
       pendingProjectChanges: data.pendingProjectChanges ?? []
     };
@@ -106,14 +109,15 @@ export async function loginToServer(role: ServerRole, password: string): Promise
   const data = (await response.json()) as Omit<BootstrapState, "serverMode">;
   serverMode = true;
   serverRole = data.role;
-  if (data.project) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data.project));
+  const project = data.project ? stripPersonDocuments(data.project) : null;
+  if (project) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }
   return {
     serverMode: true,
     authenticated: data.authenticated,
     role: data.role,
-    project: data.project,
+    project,
     settings: normalizeServerSettings(data.settings),
     pendingProjectChanges: data.pendingProjectChanges ?? []
   };
@@ -126,15 +130,17 @@ export async function logoutFromServer() {
 }
 
 export function saveProject(project: TreeProject) {
+  const projectWithoutDocuments = stripPersonDocuments(project);
+
   if (serverMode) {
-    void saveProjectToServer(project);
+    void saveProjectToServer(projectWithoutDocuments);
     return true;
   }
 
   try {
     window.localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ ...project, updatedAt: new Date().toISOString() })
+      JSON.stringify({ ...projectWithoutDocuments, updatedAt: new Date().toISOString() })
     );
     return true;
   } catch (error) {
@@ -190,21 +196,23 @@ export function addProjectSyncListener(listener: (detail: ProjectSyncDetail) => 
 
 async function saveProjectToServer(project: TreeProject) {
   try {
+    const projectWithoutDocuments = stripPersonDocuments(project);
     const response = await fetch("/api/project", {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project })
+      body: JSON.stringify({ project: projectWithoutDocuments })
     });
     const data = (await response.json()) as ProjectSyncDetail;
     if (!response.ok) throw new Error(data.error || "SAVE_ERROR");
-    if (data.project) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data.project));
+    const savedProject = data.project ? stripPersonDocuments(data.project) : null;
+    if (savedProject) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedProject));
     }
     window.dispatchEvent(
       new CustomEvent<ProjectSyncDetail>("opentree:project-sync", {
         detail: {
-          project: data.project ?? null,
+          project: savedProject,
           pendingProjectChanges: data.pendingProjectChanges,
           status: data.status || (serverRole === "guest" ? "pending" : "saved")
         }
@@ -227,14 +235,25 @@ async function postPendingProjectChange(id: string, action: "accept" | "reject")
   });
   if (!response.ok) throw new Error("PENDING_CHANGE_ERROR");
   const data = (await response.json()) as { project: TreeProject | null; pendingProjectChanges: PendingProjectChange[] };
-  if (data.project) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data.project));
+  const project = data.project ? stripPersonDocuments(data.project) : null;
+  if (project) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }
-  return data;
+  return { ...data, project };
 }
 
 function normalizeServerSettings(settings?: Partial<ServerSettings>): ServerSettings {
   return {
     guestPhotoLimit: Math.max(0, Number(settings?.guestPhotoLimit ?? 50))
+  };
+}
+
+function stripPersonDocuments(project: TreeProject): TreeProject {
+  return {
+    ...project,
+    people: (project.people ?? []).map((person) => {
+      const { documents: _documents, ...personWithoutDocuments } = person as typeof person & { documents?: unknown };
+      return personWithoutDocuments;
+    })
   };
 }

@@ -60,7 +60,7 @@ export function TreeView({
   const [connectors, setConnectors] = useState<TreeConnector[]>([]);
   const [generationGuides, setGenerationGuides] = useState<GenerationGuide[]>([]);
   const [connectorSize, setConnectorSize] = useState({ width: 0, height: 0 });
-  const nodes = useMemo(() => normalizeTreeNodes(node, fallbackPeople), [node, fallbackPeople]);
+  const nodes = useMemo(() => normalizeTreeNodes(node, fallbackPeople, relationships), [node, fallbackPeople, relationships]);
 
   useLayoutEffect(() => {
     const stage = stageRef.current;
@@ -311,7 +311,7 @@ function TreeBranch({
 }: Omit<TreeViewProps, "node" | "viewportScale"> & { node: TreeNode; branchKey: string; externalSide?: BranchSide }) {
   if (!node.person) {
     if (node.children.length === 0) return null;
-    const sortedChildren = sortTreeNodesByBirthDate(node.children);
+    const sortedChildren = sortRootNodesByDescendant(node.children, relationships, fallbackPeople);
 
     return (
       <div className="tree-branch virtual-root has-children" data-tree-branch-id={branchKey}>
@@ -345,35 +345,40 @@ function TreeBranch({
 
   const person = node.person;
   const hasChildren = node.children.length > 0;
-  const sortedChildren = sortTreeNodesByBirthDate(node.children);
+  const sortedChildren = sortSiblingTreeNodes(node.children);
   const partnersOnLeft = externalSide === "left";
   const isPersonVisible = isTimelineVisible(person.id, visiblePersonIds);
-  const partnerNodes = node.partners.map((partner) => (
-    <div className={`couple-partner ${partnersOnLeft ? "partner-left" : ""}`} key={partner.id}>
-      <PartnerConnector
-        hidden={
-          !isPersonVisible ||
-          !isTimelineVisible(partner.id, visiblePersonIds) ||
-          !isTimelinePartnerVisible(person.id, partner.id, visiblePartnerRelationshipKeys)
-        }
-      />
-      <TreePerson
-        person={partner}
-        selected={selectedId === partner.id}
-        timelineVisible={isTimelineVisible(partner.id, visiblePersonIds)}
-        compact
-        onSelect={onSelect}
-        onAddRelative={onAddRelative}
-        addLabels={addLabels}
-        lifeLabels={lifeLabels}
-        displaySettings={displaySettings}
-        clinicalConditions={clinicalConditions}
-        clinicalCategories={clinicalCategories}
-        canAddParent={(parentCounts[partner.id] ?? 0) < 2}
-        flagPortraitUrl={flagBackgrounds?.[partner.id]}
-      />
-    </div>
-  ));
+  const partnerNodes = node.partners.map((partner) => {
+    const relationshipStartDate = getPartnerRelationshipStartDate(person.id, partner.id, relationships);
+
+    return (
+      <div className={`couple-partner ${partnersOnLeft ? "partner-left" : ""}`} key={partner.id}>
+        <PartnerConnector
+          hidden={
+            !isPersonVisible ||
+            !isTimelineVisible(partner.id, visiblePersonIds) ||
+            !isTimelinePartnerVisible(person.id, partner.id, visiblePartnerRelationshipKeys)
+          }
+          startDate={relationshipStartDate}
+        />
+        <TreePerson
+          person={partner}
+          selected={selectedId === partner.id}
+          timelineVisible={isTimelineVisible(partner.id, visiblePersonIds)}
+          compact
+          onSelect={onSelect}
+          onAddRelative={onAddRelative}
+          addLabels={addLabels}
+          lifeLabels={lifeLabels}
+          displaySettings={displaySettings}
+          clinicalConditions={clinicalConditions}
+          clinicalCategories={clinicalCategories}
+          canAddParent={(parentCounts[partner.id] ?? 0) < 2}
+          flagPortraitUrl={flagBackgrounds?.[partner.id]}
+        />
+      </div>
+    );
+  });
 
   return (
     <div className={`tree-branch ${hasChildren ? "has-children" : ""}`} data-tree-branch-id={branchKey}>
@@ -426,16 +431,35 @@ function TreeBranch({
   );
 }
 
-function normalizeTreeNodes(node: TreeViewProps["node"], fallbackPeople: Person[]) {
-  const nodes = flattenTreeNodes(node).sort((first, second) => compareNullableTreePeople(first.person, second.person));
+function normalizeTreeNodes(node: TreeViewProps["node"], fallbackPeople: Person[], relationships: Relationship[]) {
+  const nodes = sortRootNodesByDescendant(flattenTreeNodes(node), relationships, fallbackPeople);
 
   if (nodes.length > 0) return nodes;
 
   return fallbackPeople[0] ? [{ person: fallbackPeople[0], partners: [], children: [] }] : [];
 }
 
-function sortTreeNodesByBirthDate(nodes: TreeNode[]) {
-  return [...nodes].sort((first, second) => compareNullableTreePeople(first.person, second.person));
+function sortSiblingTreeNodes(nodes: TreeNode[]) {
+  return [...nodes].sort((first, second) => compareNullableTreePeopleYoungerFirst(first.person, second.person));
+}
+
+function sortRootNodesByDescendant(nodes: TreeNode[], relationships: Relationship[], people: Person[]) {
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const peopleRank = new Map(
+    [...people]
+      .sort((first, second) => comparePeopleYoungerFirst(first, second))
+      .map((person, index) => [person.id, index])
+  );
+
+  return [...nodes].sort((first, second) => {
+    const firstAnchor = getDescendantAnchorRank(first, relationships, peopleById, peopleRank);
+    const secondAnchor = getDescendantAnchorRank(second, relationships, peopleById, peopleRank);
+
+    if (firstAnchor !== secondAnchor) return firstAnchor - secondAnchor;
+    const coupleOrder = compareRootNodesByLinkedCouple(first, second, relationships, peopleById);
+    if (coupleOrder !== 0) return coupleOrder;
+    return compareNullableTreePeopleYoungerFirst(first.person, second.person);
+  });
 }
 
 function flattenTreeNodes(node: TreeViewProps["node"]): TreeNode[] {
@@ -445,11 +469,98 @@ function flattenTreeNodes(node: TreeViewProps["node"]): TreeNode[] {
   return node.children.flatMap((child) => flattenTreeNodes(child));
 }
 
-function compareNullableTreePeople(first: Person | null, second: Person | null) {
-  if (first && second) return comparePeopleByBirthDate(first, second);
+function compareNullableTreePeopleYoungerFirst(first: Person | null, second: Person | null) {
+  if (first && second) return comparePeopleYoungerFirst(first, second);
   if (first) return -1;
   if (second) return 1;
   return 0;
+}
+
+function comparePeopleYoungerFirst(first: Person, second: Person) {
+  return -comparePeopleByBirthDate(first, second);
+}
+
+function compareRootNodesByLinkedCouple(
+  first: TreeNode,
+  second: TreeNode,
+  relationships: Relationship[],
+  peopleById: Map<string, Person>
+) {
+  const firstDescendants = getTreeNodePersonIds(first);
+  const secondDescendants = getTreeNodePersonIds(second);
+  const partnerRelationship = relationships.find((relationship) => {
+    if (!["partner", "spouse", "former_spouse"].includes(relationship.kind)) return false;
+    return (
+      (firstDescendants.has(relationship.fromPersonId) && secondDescendants.has(relationship.toPersonId)) ||
+      (firstDescendants.has(relationship.toPersonId) && secondDescendants.has(relationship.fromPersonId))
+    );
+  });
+
+  if (!partnerRelationship) return 0;
+
+  const firstPartnerId = firstDescendants.has(partnerRelationship.fromPersonId)
+    ? partnerRelationship.fromPersonId
+    : partnerRelationship.toPersonId;
+  const secondPartnerId = secondDescendants.has(partnerRelationship.fromPersonId)
+    ? partnerRelationship.fromPersonId
+    : partnerRelationship.toPersonId;
+  const firstPartner = peopleById.get(firstPartnerId);
+  const secondPartner = peopleById.get(secondPartnerId);
+
+  if (!firstPartner || !secondPartner) return 0;
+  return compareCoupleSide(firstPartner, secondPartner);
+}
+
+function compareCoupleSide(first: Person, second: Person) {
+  const firstRank = getCoupleSideRank(first);
+  const secondRank = getCoupleSideRank(second);
+
+  if (firstRank !== secondRank) return firstRank - secondRank;
+  return comparePeopleYoungerFirst(first, second);
+}
+
+function getCoupleSideRank(person: Person) {
+  if (person.gender === "female") return 0;
+  if (person.gender === "male") return 1;
+  return 2;
+}
+
+function getTreeNodePersonIds(node: TreeNode) {
+  return new Set(
+    flattenTreeNodes(node)
+      .flatMap((child) => [child.person?.id, ...child.partners.map((partner) => partner.id)])
+      .filter((id): id is string => Boolean(id))
+  );
+}
+
+function getDescendantAnchorRank(
+  node: TreeNode,
+  relationships: Relationship[],
+  peopleById: Map<string, Person>,
+  peopleRank: Map<string, number>
+) {
+  const parentIds = new Set(
+    [node.person?.id, ...node.partners.map((partner) => partner.id)].filter((id): id is string => Boolean(id))
+  );
+  const directChildRanks = relationships
+    .filter((relationship) => relationship.kind === "parent_child" && parentIds.has(relationship.fromPersonId))
+    .map((relationship) => peopleRank.get(relationship.toPersonId))
+    .filter((rank): rank is number => typeof rank === "number");
+
+  if (directChildRanks.length > 0) {
+    return directChildRanks.reduce((total, rank) => total + rank, 0) / directChildRanks.length;
+  }
+
+  const descendantRanks = flattenTreeNodes(node)
+    .map((child) => (child.person ? peopleRank.get(child.person.id) : undefined))
+    .filter((rank): rank is number => typeof rank === "number");
+
+  if (descendantRanks.length > 0) {
+    return descendantRanks.reduce((total, rank) => total + rank, 0) / descendantRanks.length;
+  }
+
+  const fallbackPerson = node.person ? peopleById.get(node.person.id) : undefined;
+  return fallbackPerson ? (peopleRank.get(fallbackPerson.id) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
 }
 
 function getUniqueGenerationYs(values: number[]) {
@@ -520,15 +631,43 @@ function cssEscape(value: string) {
   return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
 }
 
-function PartnerConnector({ hidden }: { hidden?: boolean }) {
+function getPartnerRelationshipStartDate(firstId: string, secondId: string, relationships: Relationship[]) {
+  return relationships.find(
+    (relationship) =>
+      ["partner", "spouse", "former_spouse"].includes(relationship.kind) &&
+      ((relationship.fromPersonId === firstId && relationship.toPersonId === secondId) ||
+        (relationship.fromPersonId === secondId && relationship.toPersonId === firstId))
+  )?.startDate;
+}
+
+function formatRelationshipStartDate(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+
+  const yearFirst = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (yearFirst) return `${yearFirst[3].padStart(2, "0")}/${yearFirst[2].padStart(2, "0")}/${yearFirst[1]}`;
+
+  const dayFirst = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dayFirst) return `${dayFirst[1].padStart(2, "0")}/${dayFirst[2].padStart(2, "0")}/${dayFirst[3]}`;
+
+  return trimmed;
+}
+
+function PartnerConnector({ hidden, startDate }: { hidden?: boolean; startDate?: string }) {
+  const formattedStartDate = formatRelationshipStartDate(startDate);
+
   return (
-    <span className={`partner-connector ${hidden ? "timeline-hidden" : ""}`} aria-hidden="true">
+    <span
+      className={`partner-connector ${hidden ? "timeline-hidden" : ""}`}
+      aria-label={formattedStartDate ? `Inicio de la relación: ${formattedStartDate}` : undefined}
+    >
       <svg className="rings-icon" viewBox="0 0 52 28" role="img">
         <circle cx="22" cy="14" r="8.2" />
         <circle cx="32" cy="14" r="8.2" />
         <path d="M21 4.5h4l2 4" />
         <path d="M29 4.5h4l-2 4" />
       </svg>
+      {formattedStartDate ? <span className="relationship-date-tooltip">Inicio: {formattedStartDate}</span> : null}
     </span>
   );
 }

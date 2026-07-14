@@ -132,12 +132,14 @@ function loadConfig() {
 let config = loadConfig();
 
 function loadProject() {
-  return readJson(projectPath, null);
+  const project = stripPersonDocuments(readJson(projectPath, null));
+  if (project) writeJson(projectPath, project);
+  return project;
 }
 
 function saveProject(project) {
   const nextProject = {
-    ...project,
+    ...stripPersonDocuments(project),
     updatedAt: now()
   };
   writeJson(projectPath, nextProject);
@@ -153,6 +155,8 @@ function savePendingChanges(changes) {
 }
 
 function sanitizeGuestProject(proposedProject, currentProject) {
+  proposedProject = stripPersonDocuments(proposedProject);
+  currentProject = stripPersonDocuments(currentProject);
   if (!currentProject) return proposedProject;
   const proposedPeople = mergeById(currentProject.people || [], proposedProject.people || []);
   const proposedRelationships = mergeById(currentProject.relationships || [], proposedProject.relationships || []);
@@ -176,6 +180,17 @@ function sanitizeGuestProject(proposedProject, currentProject) {
     contributions: currentProject.contributions,
     createdAt: currentProject.createdAt,
     updatedAt: now()
+  };
+}
+
+function stripPersonDocuments(project) {
+  if (!project || !Array.isArray(project.people)) return project;
+  return {
+    ...project,
+    people: project.people.map((person) => {
+      const { documents, ...personWithoutDocuments } = person || {};
+      return personWithoutDocuments;
+    })
   };
 }
 

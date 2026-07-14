@@ -39,19 +39,9 @@ export interface Person {
   deathPlace?: string;
   photoUrl?: string;
   notes?: string;
-  documents?: PersonDocument[];
   clinicalConditionIds?: string[];
   publicInfoLinks?: PublicInfoLink[];
   events: LifeEvent[];
-}
-
-export interface PersonDocument {
-  id: string;
-  title: string;
-  fileName: string;
-  dataUrl: string;
-  mimeType: "application/pdf" | string;
-  createdAt: string;
 }
 
 export interface PublicInfoLink {

@@ -23,7 +23,6 @@ import {
   MapPinned,
   Maximize2,
   Moon,
-  Paperclip,
   Palette,
   Pencil,
   Plus,
@@ -72,7 +71,6 @@ import type {
   GalleryFaceRegion,
   Locale,
   Person,
-  PersonDocument,
   PublicInfoLink,
   Relationship,
   SurnameProfile,
@@ -82,7 +80,7 @@ import type {
 
 type WizardStep = "owner" | "parents";
 type PersonProfileTab = "details" | "clinical" | "public" | "stars";
-type SettingsTab = "personalization" | "conditions";
+type SettingsTab = "personalization" | "conditions" | "access";
 type PublicInfoPreview = Pick<PublicInfoLink, "title" | "url" | "snippet" | "imageUrl">;
 type MainView =
   | "tree"
@@ -767,53 +765,6 @@ export function App() {
       people: project.people.map((person) =>
         person.id === selectedPerson.id
           ? { ...person, publicInfoLinks: (person.publicInfoLinks ?? []).filter((link) => link.id !== linkId) }
-          : person
-      ),
-      updatedAt: new Date().toISOString()
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
-  async function addDocumentToSelectedPerson(file?: File) {
-    if (!project || !selectedPerson || !file) return;
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      window.alert(t.pdfInvalid);
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const document: PersonDocument = {
-      id: createId("document"),
-      title: file.name.replace(/\.pdf$/i, ""),
-      fileName: file.name,
-      mimeType: file.type || "application/pdf",
-      dataUrl: await readFileAsDataUrl(file),
-      createdAt: now
-    };
-    const nextProject = {
-      ...project,
-      people: project.people.map((person) =>
-        person.id === selectedPerson.id
-          ? { ...person, documents: [...(person.documents ?? []), document] }
-          : person
-      ),
-      updatedAt: now
-    };
-
-    setProject(nextProject);
-    saveProject(nextProject);
-  }
-
-  function removeSelectedPersonDocument(documentId: string) {
-    if (!project || !selectedPerson) return;
-
-    const nextProject = {
-      ...project,
-      people: project.people.map((person) =>
-        person.id === selectedPerson.id
-          ? { ...person, documents: (person.documents ?? []).filter((document) => document.id !== documentId) }
           : person
       ),
       updatedAt: new Date().toISOString()
@@ -1842,6 +1793,7 @@ export function App() {
           ) : null}
           {serverMode ? (
             <button
+              className="rail-logout-button"
               type="button"
               title="Salir"
               onClick={async () => {
@@ -2193,6 +2145,16 @@ export function App() {
                 <HeartPulse size={15} />
                 {t.conditionsTab}
               </button>
+              {serverMode && serverRole === "admin" ? (
+                <button
+                  className={settingsTab === "access" ? "active" : ""}
+                  type="button"
+                  onClick={() => setSettingsTab("access")}
+                >
+                  <Fingerprint size={15} />
+                  {t.accessTab}
+                </button>
+              ) : null}
             </div>
           </header>
           {settingsTab === "personalization" ? (
@@ -2305,16 +2267,17 @@ export function App() {
                   onChange={(event) => updateDisplaySettings({ showClinicalConditions: event.target.checked })}
                 />
               </label>
-              {serverMode && serverRole === "admin" ? (
-                <ServerAccessSettingsPanel
-                  settings={serverSettings}
-                  onSaveSettings={async (settings) => {
-                    const nextSettings = await updateServerSettings(settings);
-                    setServerSettings(nextSettings);
-                  }}
-                  onSavePasswords={updateServerPasswords}
-                />
-              ) : null}
+            </div>
+          ) : settingsTab === "access" && serverMode && serverRole === "admin" ? (
+            <div className="settings-list">
+              <ServerAccessSettingsPanel
+                settings={serverSettings}
+                onSaveSettings={async (settings) => {
+                  const nextSettings = await updateServerSettings(settings);
+                  setServerSettings(nextSettings);
+                }}
+                onSavePasswords={updateServerPasswords}
+              />
             </div>
           ) : (
             <ConditionsCatalogView
@@ -2506,8 +2469,6 @@ export function App() {
                 onUpdateRelationshipStartDate={updateRelationshipStartDate}
                 onSetPersonPhotoFromGallery={setPersonPhotoFromGallery}
                 onOpenPersonGallery={openPersonGallery}
-                onAddDocument={addDocumentToSelectedPerson}
-                onRemoveDocument={removeSelectedPersonDocument}
                 onSaveFamousBirth={saveFamousBirth}
               />
             )}
@@ -2909,8 +2870,6 @@ function PersonProfile({
   onUpdateRelationshipStartDate,
   onSetPersonPhotoFromGallery,
   onOpenPersonGallery,
-  onAddDocument,
-  onRemoveDocument,
   onSaveFamousBirth
 }: {
   person: Person;
@@ -2939,8 +2898,6 @@ function PersonProfile({
   onUpdateRelationshipStartDate: (relationshipId: string, startDate: string) => void;
   onSetPersonPhotoFromGallery: (photo: GalleryPhoto, personId: string) => void;
   onOpenPersonGallery: (person: Person) => void;
-  onAddDocument: (file?: File) => void;
-  onRemoveDocument: (documentId: string) => void;
   onSaveFamousBirth: (cacheKey: string, match: FamousBirthMatch | null) => void;
 }) {
   const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
@@ -3038,12 +2995,6 @@ function PersonProfile({
               />
             </section>
           ) : null}
-          <PersonDocumentsPanel
-            documents={person.documents ?? []}
-            t={t}
-            onAddDocument={onAddDocument}
-            onRemoveDocument={onRemoveDocument}
-          />
         </>
       ) : activeTab === "clinical" ? (
         <ClinicalProfilePanel
@@ -3069,58 +3020,6 @@ function PersonProfile({
         <StarMapPanel person={person} t={t} onEdit={onEdit} />
       )}
     </div>
-  );
-}
-
-function PersonDocumentsPanel({
-  documents,
-  t,
-  onAddDocument,
-  onRemoveDocument
-}: {
-  documents: PersonDocument[];
-  t: Record<string, string>;
-  onAddDocument: (file?: File) => void;
-  onRemoveDocument: (documentId: string) => void;
-}) {
-  return (
-    <section className="profile-documents-panel">
-      <div className="profile-gallery-heading">
-        <strong>{t.documents}</strong>
-        <label className="icon-upload-button" title={t.addPdf} aria-label={t.addPdf}>
-          <Paperclip size={16} />
-          <input
-            type="file"
-            accept="application/pdf,.pdf"
-            onChange={(event) => {
-              onAddDocument(event.target.files?.[0]);
-              event.currentTarget.value = "";
-            }}
-          />
-        </label>
-      </div>
-      {documents.length === 0 ? (
-        <p>{t.noDocuments}</p>
-      ) : (
-        <div className="person-document-list">
-          {documents.map((document) => (
-            <article key={document.id} className="person-document-card">
-              <Paperclip size={17} />
-              <span>
-                <strong>{document.title || document.fileName}</strong>
-                <small>{document.fileName}</small>
-              </span>
-              <a href={document.dataUrl} target="_blank" rel="noreferrer" title={t.openDocument} aria-label={t.openDocument}>
-                <SquareArrowOutUpRight size={15} />
-              </a>
-              <button type="button" title={t.deletePhoto} aria-label={t.deletePhoto} onClick={() => onRemoveDocument(document.id)}>
-                <Trash2 size={15} />
-              </button>
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 

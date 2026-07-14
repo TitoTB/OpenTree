@@ -58,7 +58,7 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
       .filter((child): child is Person => Boolean(child))
       .filter((child, index, all) => all.findIndex((candidate) => candidate.id === child.id) === index)
       .filter((child) => path.has(child.id) || !covered.has(child.id))
-      .sort(comparePeopleByBirthDate)
+      .sort(comparePeopleByBirthDateDescending)
       .map((child) =>
         path.has(child.id) ? { person: child, partners: [], children: [] } : walk(child, new Set(path), covered)
       );
@@ -144,6 +144,10 @@ export function comparePeopleByBirthDate(first: Person, second: Person) {
   if (firstTime === null && secondTime !== null) return 1;
 
   return fullName(first).localeCompare(fullName(second), "es");
+}
+
+function comparePeopleByBirthDateDescending(first: Person, second: Person) {
+  return -comparePeopleByBirthDate(first, second);
 }
 
 function birthDateTime(value?: string) {
