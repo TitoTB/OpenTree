@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
-import type { ClinicalCondition, ClinicalConditionCategory, DisplaySettings, Person } from "../domain/types";
+import type { ClinicalCondition, ClinicalConditionCategory, DisplaySettings, Person, Relationship } from "../domain/types";
 import { comparePeopleByBirthDate } from "../tree/layout";
 import type { TreeNode } from "../tree/layout";
 import { PersonCard } from "./PersonCard";
@@ -22,6 +22,7 @@ type BranchSide = "left" | "right";
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
   fallbackPeople: Person[];
+  relationships: Relationship[];
   selectedId: string;
   onSelect: (person: Person) => void;
   onAddRelative: (person: Person, kind: AddRelativeKind) => void;
@@ -40,6 +41,7 @@ interface TreeViewProps {
 export function TreeView({
   node,
   fallbackPeople,
+  relationships,
   selectedId,
   onSelect,
   onAddRelative,
@@ -72,6 +74,7 @@ export function TreeView({
       const toLocalY = (value: number) => value / (scaleY || 1);
       const nextConnectors: TreeConnector[] = [];
       const nextGenerationYs: number[] = [];
+      const nestedParentChildKeys = new Set<string>();
 
       stage.querySelectorAll<HTMLElement>(".couple-row").forEach((coupleRow) => {
         const coupleRect = coupleRow.getBoundingClientRect();
@@ -117,6 +120,13 @@ export function TreeView({
         const junctionY = toLocalY(childrenRect.top - stageRect.top);
         const childPoints = childAnchors.map((anchor) => {
           const anchorRect = anchor.getBoundingClientRect();
+          const childPersonId = anchor.closest<HTMLElement>(".tree-person")?.dataset.personId;
+          visibleParentPeople.forEach((parentPerson) => {
+            const parentPersonId = parentPerson.dataset.personId;
+            if (parentPersonId && childPersonId) {
+              nestedParentChildKeys.add(getParentChildKey(parentPersonId, childPersonId));
+            }
+          });
           return {
             x: toLocalX(anchorRect.left - stageRect.left + anchorRect.width / 2),
             y: toLocalY(anchorRect.top - stageRect.top)
@@ -144,7 +154,46 @@ export function TreeView({
             d: `M ${formatCoord(point.x)} ${formatCoord(junctionY)} V ${formatCoord(point.y)}`
           });
         });
+
       });
+
+      relationships
+        .filter((relationship) => relationship.kind === "parent_child")
+        .forEach((relationship) => {
+          const relationshipKey = getParentChildKey(relationship.fromPersonId, relationship.toPersonId);
+          if (nestedParentChildKeys.has(relationshipKey)) return;
+
+          const parentPerson = stage.querySelector<HTMLElement>(
+            `.tree-person[data-person-id="${cssEscape(relationship.fromPersonId)}"]`
+          );
+          const childPerson = stage.querySelector<HTMLElement>(
+            `.tree-person[data-person-id="${cssEscape(relationship.toPersonId)}"]`
+          );
+          if (
+            !parentPerson ||
+            !childPerson ||
+            parentPerson.dataset.timelineVisible === "false" ||
+            childPerson.dataset.timelineVisible === "false"
+          ) {
+            return;
+          }
+
+          const parentCard = parentPerson.querySelector<HTMLElement>(".person-card");
+          const childCard = childPerson.querySelector<HTMLElement>(".person-card");
+          if (!parentCard || !childCard) return;
+
+          const parentRect = parentCard.getBoundingClientRect();
+          const childRect = childCard.getBoundingClientRect();
+          const parentX = toLocalX(parentRect.left - stageRect.left + parentRect.width / 2);
+          const parentY = toLocalY(parentRect.bottom - stageRect.top);
+          const childX = toLocalX(childRect.left - stageRect.left + childRect.width / 2);
+          const childY = toLocalY(childRect.top - stageRect.top);
+          const midY = parentY < childY ? parentY + (childY - parentY) / 2 : parentY + 28;
+
+          nextConnectors.push({
+            d: `M ${formatCoord(parentX)} ${formatCoord(parentY)} V ${formatCoord(midY)} H ${formatCoord(childX)} V ${formatCoord(childY)}`
+          });
+        });
 
       setConnectorSize({
         width: Math.max(1, Math.ceil(stage.scrollWidth)),
@@ -172,7 +221,7 @@ export function TreeView({
       resizeObserver.disconnect();
       window.removeEventListener("resize", updateConnectors);
     };
-  }, [nodes, displaySettings, viewportScale, visiblePersonIds, visiblePartnerRelationshipKeys]);
+  }, [nodes, relationships, displaySettings, viewportScale, visiblePersonIds, visiblePartnerRelationshipKeys]);
 
   if (nodes.length === 0) return null;
 
@@ -221,6 +270,7 @@ export function TreeView({
             externalSide={getBranchSide(index, nodes.length)}
             node={branch}
             fallbackPeople={fallbackPeople}
+            relationships={relationships}
             selectedId={selectedId}
             onSelect={onSelect}
             onAddRelative={onAddRelative}
@@ -252,6 +302,7 @@ function TreeBranch({
   clinicalCategories,
   parentCounts,
   fallbackPeople,
+  relationships,
   branchKey,
   externalSide,
   visiblePersonIds,
@@ -272,6 +323,7 @@ function TreeBranch({
               externalSide={getBranchSide(index, sortedChildren.length)}
               node={child}
               fallbackPeople={fallbackPeople}
+              relationships={relationships}
               selectedId={selectedId}
               onSelect={onSelect}
               onAddRelative={onAddRelative}
@@ -353,6 +405,7 @@ function TreeBranch({
               externalSide={getBranchSide(index, sortedChildren.length)}
               node={child}
               fallbackPeople={fallbackPeople}
+              relationships={relationships}
               selectedId={selectedId}
               onSelect={onSelect}
               onAddRelative={onAddRelative}
@@ -453,6 +506,14 @@ function getRelationshipKey(firstId: string, secondId: string) {
   return [firstId, secondId].sort().join("::");
 }
 
+function getParentChildKey(parentId: string, childId: string) {
+  return `${parentId}::${childId}`;
+}
+
+function cssEscape(value: string) {
+  return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
 function PartnerConnector({ hidden }: { hidden?: boolean }) {
   return (
     <span className={`partner-connector ${hidden ? "timeline-hidden" : ""}`} aria-hidden="true">
@@ -501,6 +562,7 @@ function TreePerson({
     <div
       className={`tree-person ${timelineVisible ? "" : "timeline-hidden"}`}
       data-primary-anchor={primaryAnchor ? "true" : undefined}
+      data-person-id={person.id}
       data-timeline-visible={timelineVisible ? "true" : "false"}
     >
       {canAddParent ? (

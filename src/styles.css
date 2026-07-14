@@ -2326,6 +2326,29 @@ button.zodiac-badge:hover {
 
 .tree-stage .person-card.compact {
   width: 220px;
+  height: 78px;
+  min-height: 78px;
+  max-height: 78px;
+  overflow: hidden;
+}
+
+.tree-stage .person-card.compact .person-copy {
+  align-content: center;
+  min-height: 0;
+}
+
+.tree-stage .person-card.compact .person-copy strong {
+  display: -webkit-box;
+  max-height: 2.24em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tree-stage .person-card.compact .person-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-person {

@@ -1907,6 +1907,7 @@ export function App() {
             <TreeView
               node={tree}
               fallbackPeople={project.people}
+              relationships={project.relationships}
               selectedId={selectedId}
                 onSelect={selectPerson}
                 onAddRelative={addRelativeFromTree}
