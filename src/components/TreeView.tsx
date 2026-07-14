@@ -18,6 +18,7 @@ type GenerationGuide = {
 };
 
 type BranchSide = "left" | "right";
+const TREE_GENERATION_ROW_HEIGHT = 170;
 
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
@@ -268,6 +269,7 @@ export function TreeView({
             key={branch.person?.id ?? `root-${index}`}
             branchKey={branch.person?.id ?? `root-${index}`}
             externalSide={getBranchSide(index, nodes.length)}
+            rootGenerationOffset={branch.generation ?? 0}
             node={branch}
             fallbackPeople={fallbackPeople}
             relationships={relationships}
@@ -305,10 +307,16 @@ function TreeBranch({
   relationships,
   branchKey,
   externalSide,
+  rootGenerationOffset,
   visiblePersonIds,
   visiblePartnerRelationshipKeys,
   flagBackgrounds
-}: Omit<TreeViewProps, "node" | "viewportScale"> & { node: TreeNode; branchKey: string; externalSide?: BranchSide }) {
+}: Omit<TreeViewProps, "node" | "viewportScale"> & {
+  node: TreeNode;
+  branchKey: string;
+  externalSide?: BranchSide;
+  rootGenerationOffset?: number;
+}) {
   if (!node.person) {
     if (node.children.length === 0) return null;
     const sortedChildren = sortRootNodesByDescendant(node.children, relationships, fallbackPeople);
@@ -381,7 +389,11 @@ function TreeBranch({
   });
 
   return (
-    <div className={`tree-branch ${hasChildren ? "has-children" : ""}`} data-tree-branch-id={branchKey}>
+    <div
+      className={`tree-branch ${hasChildren ? "has-children" : ""}`}
+      data-tree-branch-id={branchKey}
+      style={rootGenerationOffset ? { marginTop: `${rootGenerationOffset * TREE_GENERATION_ROW_HEIGHT}px` } : undefined}
+    >
       <div className={`couple-row ${partnersOnLeft ? "partners-left" : ""}`}>
         {partnersOnLeft ? partnerNodes : null}
         <TreePerson
@@ -445,21 +457,62 @@ function sortSiblingTreeNodes(nodes: TreeNode[]) {
 
 function sortRootNodesByDescendant(nodes: TreeNode[], relationships: Relationship[], people: Person[]) {
   const peopleById = new Map(people.map((person) => [person.id, person]));
-  const peopleRank = new Map(
-    [...people]
-      .sort((first, second) => comparePeopleYoungerFirst(first, second))
-      .map((person, index) => [person.id, index])
-  );
+  const peopleRank = buildVisualPeopleRank(people, relationships);
 
   return [...nodes].sort((first, second) => {
     const firstAnchor = getDescendantAnchorRank(first, relationships, peopleById, peopleRank);
     const secondAnchor = getDescendantAnchorRank(second, relationships, peopleById, peopleRank);
 
     if (firstAnchor !== secondAnchor) return firstAnchor - secondAnchor;
+    const generationOrder = (first.generation ?? 0) - (second.generation ?? 0);
+    if (generationOrder !== 0) return generationOrder;
     const coupleOrder = compareRootNodesByLinkedCouple(first, second, relationships, peopleById);
     if (coupleOrder !== 0) return coupleOrder;
     return compareNullableTreePeopleYoungerFirst(first.person, second.person);
   });
+}
+
+function buildVisualPeopleRank(people: Person[], relationships: Relationship[]) {
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const childIds = new Set(
+    relationships
+      .filter((relationship) => relationship.kind === "parent_child")
+      .map((relationship) => relationship.toPersonId)
+  );
+  const roots = people
+    .filter((person) => !childIds.has(person.id))
+    .sort(comparePeopleYoungerFirst);
+  const visited = new Set<string>();
+  const ordered: Person[] = [];
+
+  const visit = (person: Person) => {
+    if (visited.has(person.id)) return;
+    visited.add(person.id);
+    ordered.push(person);
+
+    getPartnerIds(person.id, relationships)
+      .map((id) => peopleById.get(id))
+      .filter((partner): partner is Person => Boolean(partner))
+      .sort(comparePeopleYoungerFirst)
+      .forEach((partner) => {
+        if (!visited.has(partner.id)) {
+          visited.add(partner.id);
+          ordered.push(partner);
+        }
+      });
+
+    relationships
+      .filter((relationship) => relationship.kind === "parent_child" && relationship.fromPersonId === person.id)
+      .map((relationship) => peopleById.get(relationship.toPersonId))
+      .filter((child): child is Person => Boolean(child))
+      .sort(comparePeopleYoungerFirst)
+      .forEach(visit);
+  };
+
+  roots.forEach(visit);
+  people.filter((person) => !visited.has(person.id)).sort(comparePeopleYoungerFirst).forEach(visit);
+
+  return new Map(ordered.map((person, index) => [person.id, index]));
 }
 
 function flattenTreeNodes(node: TreeViewProps["node"]): TreeNode[] {
@@ -531,6 +584,31 @@ function getTreeNodePersonIds(node: TreeNode) {
       .flatMap((child) => [child.person?.id, ...child.partners.map((partner) => partner.id)])
       .filter((id): id is string => Boolean(id))
   );
+}
+
+function getPartnerIds(personId: string, relationships: Relationship[]) {
+  const explicitPartnerIds = relationships
+    .filter(
+      (relationship) =>
+        ["partner", "spouse", "former_spouse"].includes(relationship.kind) &&
+        (relationship.fromPersonId === personId || relationship.toPersonId === personId)
+    )
+    .map((relationship) =>
+      relationship.fromPersonId === personId ? relationship.toPersonId : relationship.fromPersonId
+    );
+  const childIds = relationships
+    .filter((relationship) => relationship.kind === "parent_child" && relationship.fromPersonId === personId)
+    .map((relationship) => relationship.toPersonId);
+  const coparentIds = relationships
+    .filter(
+      (relationship) =>
+        relationship.kind === "parent_child" &&
+        childIds.includes(relationship.toPersonId) &&
+        relationship.fromPersonId !== personId
+    )
+    .map((relationship) => relationship.fromPersonId);
+
+  return [...explicitPartnerIds, ...coparentIds].filter((id, index, all) => all.indexOf(id) === index);
 }
 
 function getDescendantAnchorRank(

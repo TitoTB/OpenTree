@@ -4,6 +4,7 @@ export interface TreeNode {
   person: Person | null;
   partners: Person[];
   children: TreeNode[];
+  generation?: number;
 }
 
 export function fullName(person: Person) {
@@ -12,6 +13,7 @@ export function fullName(person: Person) {
 
 export function buildVerticalTree(people: Person[], relationships: Relationship[], rootId?: PersonId): TreeNode | null {
   const peopleById = new Map(people.map((person) => [person.id, person]));
+  const personGenerations = buildPersonGenerations(people, relationships);
   const peopleWithParents = new Set(
     relationships
       .filter((relationship) => relationship.kind === "parent_child")
@@ -24,9 +26,16 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
   const rootCandidates = getRootCandidates(people, relationships, peopleWithParents)
     .map((person) => ({
       person,
-      score: countReachableFamily(person.id, relationships, new Set<PersonId>())
+      score: countReachableFamily(person.id, relationships, new Set<PersonId>()),
+      anchor: getDescendantGenerationAnchor(person.id, relationships, personGenerations)
     }))
-    .sort((first, second) => second.score - first.score || comparePeopleByBirthDate(first.person, second.person))
+    .sort(
+      (first, second) =>
+        first.anchor - second.anchor ||
+        (personGenerations.get(first.person.id) ?? 0) - (personGenerations.get(second.person.id) ?? 0) ||
+        second.score - first.score ||
+        comparePeopleByBirthDate(first.person, second.person)
+    )
     .map(({ person }) => person);
   const roots: TreeNode[] = [];
 
@@ -40,7 +49,7 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
 
   if (roots.length === 0) return null;
   if (roots.length === 1) return roots[0];
-  return { person: null, partners: [], children: roots };
+  return { person: null, partners: [], children: roots, generation: 0 };
 
   function walk(person: Person, path: Set<PersonId>, covered: Set<PersonId>): TreeNode {
     covered.add(person.id);
@@ -65,13 +74,143 @@ export function buildVerticalTree(people: Person[], relationships: Relationship[
 
     return {
       person,
+      generation: personGenerations.get(person.id) ?? 0,
       partners: partnerIds
         .map((id) => peopleById.get(id))
         .filter((partner): partner is Person => Boolean(partner))
-        .sort((first, second) => Number(peopleWithParents.has(second.id)) - Number(peopleWithParents.has(first.id))),
+        .sort(
+          (first, second) =>
+            Number(peopleWithParents.has(second.id)) - Number(peopleWithParents.has(first.id)) ||
+            (personGenerations.get(first.id) ?? 0) - (personGenerations.get(second.id) ?? 0) ||
+            comparePeopleByBirthDate(first, second)
+        ),
       children
     };
   }
+}
+
+class PersonGroupUnion {
+  private parents = new Map<PersonId, PersonId>();
+
+  constructor(ids: PersonId[]) {
+    ids.forEach((id) => this.parents.set(id, id));
+  }
+
+  find(id: PersonId): PersonId {
+    const parent = this.parents.get(id) ?? id;
+    if (parent === id) return id;
+    const root = this.find(parent);
+    this.parents.set(id, root);
+    return root;
+  }
+
+  union(first: PersonId, second: PersonId) {
+    const firstRoot = this.find(first);
+    const secondRoot = this.find(second);
+    if (firstRoot !== secondRoot) {
+      this.parents.set(secondRoot, firstRoot);
+    }
+  }
+}
+
+function buildPersonGenerations(people: Person[], relationships: Relationship[]) {
+  const personIds = people.map((person) => person.id);
+  const peopleIdsSet = new Set(personIds);
+  const union = new PersonGroupUnion(personIds);
+
+  relationships
+    .filter((relationship) => ["partner", "spouse", "former_spouse"].includes(relationship.kind))
+    .forEach((relationship) => {
+      if (peopleIdsSet.has(relationship.fromPersonId) && peopleIdsSet.has(relationship.toPersonId)) {
+        union.union(relationship.fromPersonId, relationship.toPersonId);
+      }
+    });
+
+  const parentsByChild = new Map<PersonId, PersonId[]>();
+  relationships
+    .filter((relationship) => relationship.kind === "parent_child")
+    .forEach((relationship) => {
+      const parents = parentsByChild.get(relationship.toPersonId) ?? [];
+      parents.push(relationship.fromPersonId);
+      parentsByChild.set(relationship.toPersonId, parents);
+    });
+  parentsByChild.forEach((parents) => {
+    parents.forEach((parentId) => {
+      parents.forEach((otherParentId) => {
+        if (parentId !== otherParentId && peopleIdsSet.has(parentId) && peopleIdsSet.has(otherParentId)) {
+          union.union(parentId, otherParentId);
+        }
+      });
+    });
+  });
+
+  const groupIds = new Set(personIds.map((id) => union.find(id)));
+  const groupParents = new Map<PersonId, Set<PersonId>>();
+  const groupChildren = new Map<PersonId, Set<PersonId>>();
+
+  relationships
+    .filter((relationship) => relationship.kind === "parent_child")
+    .forEach((relationship) => {
+      if (!peopleIdsSet.has(relationship.fromPersonId) || !peopleIdsSet.has(relationship.toPersonId)) return;
+      const parentGroup = union.find(relationship.fromPersonId);
+      const childGroup = union.find(relationship.toPersonId);
+      if (parentGroup === childGroup) return;
+      const children = groupChildren.get(parentGroup) ?? new Set<PersonId>();
+      children.add(childGroup);
+      groupChildren.set(parentGroup, children);
+      const parents = groupParents.get(childGroup) ?? new Set<PersonId>();
+      parents.add(parentGroup);
+      groupParents.set(childGroup, parents);
+    });
+
+  const groupDepth = new Map<PersonId, number>();
+  const visitGroup = (groupId: PersonId, visiting = new Set<PersonId>()): number => {
+    if (groupDepth.has(groupId)) return groupDepth.get(groupId) ?? 0;
+    if (visiting.has(groupId)) return 0;
+    visiting.add(groupId);
+    const parents = Array.from(groupParents.get(groupId) ?? []);
+    const depth = parents.length > 0 ? Math.max(...parents.map((parentId) => visitGroup(parentId, new Set(visiting)) + 1)) : 0;
+    groupDepth.set(groupId, depth);
+    return depth;
+  };
+
+  groupIds.forEach((groupId) => visitGroup(groupId));
+
+  const personGenerations = new Map<PersonId, number>();
+  people.forEach((person) => {
+    personGenerations.set(person.id, groupDepth.get(union.find(person.id)) ?? 0);
+  });
+
+  return normalizeGenerationStarts(personGenerations);
+}
+
+function normalizeGenerationStarts(personGenerations: Map<PersonId, number>) {
+  const minGeneration = Math.min(...Array.from(personGenerations.values()), 0);
+  if (minGeneration === 0) return personGenerations;
+  const normalized = new Map<PersonId, number>();
+  personGenerations.forEach((generation, personId) => {
+    normalized.set(personId, generation - minGeneration);
+  });
+  return normalized;
+}
+
+function getDescendantGenerationAnchor(
+  personId: PersonId,
+  relationships: Relationship[],
+  personGenerations: Map<PersonId, number>
+) {
+  const childIds = relationships
+    .filter((relationship) => relationship.kind === "parent_child" && relationship.fromPersonId === personId)
+    .map((relationship) => relationship.toPersonId);
+  const childGenerations = childIds
+    .map((childId) => personGenerations.get(childId))
+    .filter((generation): generation is number => typeof generation === "number");
+
+  if (childGenerations.length > 0) {
+    return childGenerations.reduce((total, generation) => total + generation, 0) / childGenerations.length;
+  }
+
+  return personGenerations.get(personId) ?? 0;
 }
 
 function getRootCandidates(people: Person[], relationships: Relationship[], peopleWithParents: Set<PersonId>) {
