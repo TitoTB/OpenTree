@@ -21,6 +21,8 @@ type GenerationGuide = {
 
 type BranchSide = "left" | "right";
 const TREE_GENERATION_ROW_HEIGHT = 170;
+const TREE_SIBLING_CARD_GAP = 24;
+const TREE_MAX_SIBLING_COMPACTION = 180;
 
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
@@ -70,8 +72,11 @@ export function TreeView({
     if (!stage) return;
 
     const updateConnectors = () => {
-      const stageRect = stage.getBoundingClientRect();
-      const scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
+      let stageRect = stage.getBoundingClientRect();
+      let scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
+      compactSiblingRows(stage, scaleX || 1);
+      stageRect = stage.getBoundingClientRect();
+      scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
       const scaleY = stage.offsetHeight > 0 ? stageRect.height / stage.offsetHeight : scaleX;
       const toLocalX = (value: number) => value / (scaleX || 1);
       const toLocalY = (value: number) => value / (scaleY || 1);
@@ -674,6 +679,58 @@ function getUniqueGenerationYs(values: number[]) {
       }
       return uniqueValues;
     }, []);
+}
+
+function compactSiblingRows(stage: HTMLElement, scaleX: number) {
+  stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]").forEach((branch) => {
+    branch.style.setProperty("--tree-compact-x", "0px");
+  });
+
+  stage.querySelectorAll<HTMLElement>(".children-row").forEach((row) => {
+    const childBranches = Array.from(row.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]"));
+    if (childBranches.length < 2) return;
+
+    const entries = childBranches
+      .map((branch) => {
+        const anchor = branch.querySelector<HTMLElement>(
+          ':scope > .couple-row > .tree-person[data-primary-anchor="true"] .person-card'
+        );
+        const treePerson = anchor?.closest<HTMLElement>(".tree-person");
+        if (!anchor || treePerson?.dataset.timelineVisible === "false") return null;
+        const rect = anchor.getBoundingClientRect();
+
+        return {
+          branch,
+          center: rect.left + rect.width / 2,
+          width: rect.width
+        };
+      })
+      .filter((entry): entry is { branch: HTMLElement; center: number; width: number } => Boolean(entry))
+      .sort((first, second) => first.center - second.center);
+
+    if (entries.length < 2) return;
+
+    const desiredGap = TREE_SIBLING_CARD_GAP * scaleX;
+    const desiredSpan =
+      entries.reduce((total, entry) => total + entry.width, 0) + desiredGap * Math.max(0, entries.length - 1);
+    const currentMidpoint = (entries[0].center + entries[entries.length - 1].center) / 2;
+    let cursor = currentMidpoint - desiredSpan / 2;
+
+    entries.forEach((entry) => {
+      const desiredCenter = cursor + entry.width / 2;
+      const screenShift = desiredCenter - entry.center;
+      const localShift = Math.max(
+        -TREE_MAX_SIBLING_COMPACTION,
+        Math.min(TREE_MAX_SIBLING_COMPACTION, screenShift / (scaleX || 1))
+      );
+
+      if (Math.abs(localShift) > 1) {
+        entry.branch.style.setProperty("--tree-compact-x", `${formatCoord(localShift)}px`);
+      }
+
+      cursor += entry.width + desiredGap;
+    });
+  });
 }
 
 function getBranchSide(index: number, total: number): BranchSide | undefined {

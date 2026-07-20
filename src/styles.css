@@ -6407,6 +6407,7 @@ button.calendar-day {
 
 .tree-branch {
   --primary-card-width: 220px;
+  --tree-compact-x: 0px;
   position: relative;
   z-index: 2;
   display: flex;
@@ -6414,6 +6415,7 @@ button.calendar-day {
   align-items: center;
   gap: 0;
   min-width: max-content;
+  transform: translateX(var(--tree-compact-x));
 }
 
 .tree-branch.has-children > .couple-row {
