@@ -559,6 +559,10 @@ export function App() {
 
   function buildParentRelationshipsFor(person: Person, newParentId: string) {
     const sharedParentIds = getSiblingSharedParentIds(person.id);
+    const existingParentIds =
+      project?.relationships
+        .filter((relationship) => relationship.kind === "parent_child" && relationship.toPersonId === person.id)
+        .map((relationship) => relationship.fromPersonId) ?? [];
 
     if (sharedParentIds.length > 0 && window.confirm(t.useSiblingParents)) {
       return sharedParentIds
@@ -571,7 +575,7 @@ export function App() {
         }));
     }
 
-    return [
+    const nextRelationships: Relationship[] = [
       {
         id: createId("rel"),
         kind: "parent_child" as const,
@@ -579,6 +583,17 @@ export function App() {
         toPersonId: person.id
       }
     ];
+
+    if (existingParentIds.length > 0 && window.confirm(t.linkNewParentAsPartner)) {
+      nextRelationships.push({
+        id: createId("rel"),
+        kind: "partner" as const,
+        fromPersonId: existingParentIds[0],
+        toPersonId: newParentId
+      });
+    }
+
+    return nextRelationships;
   }
 
   function buildChildRelationshipsFor(parent: Person, childId: string) {
@@ -4012,7 +4027,7 @@ function SurnameReadOnlyField({
 }
 
 type UnknownEditableField = {
-  key: "givenName" | "familyName" | "birthDate" | "birthTime" | "birthCity" | "birthCountry" | "deathDate";
+  key: "givenName" | "familyName" | "birthDate" | "birthCity" | "birthCountry" | "deathDate";
   label: string;
   type?: string;
   placeholder?: string;
@@ -4168,7 +4183,6 @@ function getUnknownEditableFields(person: Person, t: Record<string, string>): Un
   if (!person.givenName?.trim()) fields.push({ key: "givenName", label: t.givenName });
   if (!person.familyName?.trim()) fields.push({ key: "familyName", label: t.familyName });
   if (!person.birthDate?.trim()) fields.push({ key: "birthDate", label: t.birthDate, placeholder: "DD/MM/AAAA" });
-  if (!person.birthTime?.trim()) fields.push({ key: "birthTime", label: t.birthTime, type: "time" });
   if (!birthPlace.city.trim()) fields.push({ key: "birthCity", label: t.birthCity });
   if (!birthPlace.country.trim()) fields.push({ key: "birthCountry", label: t.birthCountry });
   if ((person.isDeceased || person.deathDate) && !person.deathDate?.trim()) {

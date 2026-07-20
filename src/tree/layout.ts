@@ -113,7 +113,7 @@ class PersonGroupUnion {
   }
 }
 
-function buildPersonGenerations(people: Person[], relationships: Relationship[]) {
+export function buildPersonGenerations(people: Person[], relationships: Relationship[]) {
   const personIds = people.map((person) => person.id);
   const peopleIdsSet = new Set(personIds);
   const union = new PersonGroupUnion(personIds);

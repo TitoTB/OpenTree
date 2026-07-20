@@ -6405,6 +6405,30 @@ button.calendar-day {
   min-width: max-content;
 }
 
+.tree-stage-positioned {
+  position: relative;
+  z-index: 2;
+  min-width: max-content;
+}
+
+.tree-stage-positioned .tree-person {
+  position: absolute;
+  z-index: 3;
+}
+
+.tree-relationship-slot {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  width: 44px;
+  height: 30px;
+}
+
+.tree-relationship-slot .partner-connector {
+  width: 44px;
+  height: 30px;
+}
+
 .tree-branch {
   --primary-card-width: 220px;
   --tree-compact-x: 0px;

@@ -1,8 +1,8 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import { Plus } from "lucide-react";
 import type { ClinicalCondition, ClinicalConditionCategory, DisplaySettings, Person, Relationship } from "../domain/types";
-import { comparePeopleByBirthDate } from "../tree/layout";
+import { buildPersonGenerations, comparePeopleByBirthDate } from "../tree/layout";
 import type { TreeNode } from "../tree/layout";
 import { PersonCard } from "./PersonCard";
 import type { LifeLabels } from "./PersonCard";
@@ -21,10 +21,48 @@ type GenerationGuide = {
 
 type BranchSide = "left" | "right";
 const TREE_GENERATION_ROW_HEIGHT = 170;
-const TREE_SIBLING_CARD_GAP = 24;
-const TREE_MAX_SIBLING_COMPACTION = 520;
-const TREE_MAX_CHILDREN_ALIGNMENT = 620;
-const TREE_LAYOUT_SETTLE_PASSES = 3;
+const TREE_CARD_WIDTH = 220;
+const TREE_CARD_HEIGHT = 78;
+const TREE_CARD_GAP = 24;
+const TREE_PARTNER_CONNECTOR_WIDTH = 44;
+const TREE_PARTNER_GAP = 8;
+const TREE_TOP_PADDING = 18;
+const TREE_LEFT_PADDING = 28;
+const TREE_RIGHT_PADDING = 28;
+const TREE_BOTTOM_PADDING = 44;
+const TREE_BRANCH_GAP = 24;
+
+type TreeLayoutPerson = {
+  person: Person;
+  x: number;
+  y: number;
+  primaryAnchor?: boolean;
+};
+
+type TreeLayoutRelationship = {
+  x: number;
+  y: number;
+  hidden?: boolean;
+  startDate?: string;
+};
+
+type TreeLayout = {
+  width: number;
+  height: number;
+  people: TreeLayoutPerson[];
+  relationships: TreeLayoutRelationship[];
+  connectors: TreeConnector[];
+  generationGuides: GenerationGuide[];
+};
+
+type LayoutBranch = {
+  width: number;
+  height: number;
+  anchorX: number;
+  people: TreeLayoutPerson[];
+  relationships: TreeLayoutRelationship[];
+  connectors: TreeConnector[];
+};
 
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
@@ -63,192 +101,38 @@ export function TreeView({
   visiblePartnerRelationshipKeys,
   flagBackgrounds
 }: TreeViewProps) {
-  const stageRef = useRef<HTMLDivElement>(null);
-  const [connectors, setConnectors] = useState<TreeConnector[]>([]);
-  const [generationGuides, setGenerationGuides] = useState<GenerationGuide[]>([]);
-  const [connectorSize, setConnectorSize] = useState({ width: 0, height: 0 });
   const nodes = useMemo(() => normalizeTreeNodes(node, fallbackPeople, relationships), [node, fallbackPeople, relationships]);
-
-  useLayoutEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-
-    const updateConnectors = () => {
-      let stageRect = stage.getBoundingClientRect();
-      let scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
-      settleTreeRows(stage, scaleX || 1);
-      stageRect = stage.getBoundingClientRect();
-      scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
-      const scaleY = stage.offsetHeight > 0 ? stageRect.height / stage.offsetHeight : scaleX;
-      const toLocalX = (value: number) => value / (scaleX || 1);
-      const toLocalY = (value: number) => value / (scaleY || 1);
-      const nextConnectors: TreeConnector[] = [];
-      const nextGenerationYs: number[] = [];
-      const nestedParentChildKeys = new Set<string>();
-
-      stage.querySelectorAll<HTMLElement>(".couple-row").forEach((coupleRow) => {
-        const coupleRect = coupleRow.getBoundingClientRect();
-        nextGenerationYs.push(toLocalY(coupleRect.top - stageRect.top + coupleRect.height / 2));
-      });
-
-      stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]").forEach((branch) => {
-        const coupleRow = branch.querySelector<HTMLElement>(":scope > .couple-row");
-        const childrenRow = branch.querySelector<HTMLElement>(":scope > .children-row");
-        if (!coupleRow || !childrenRow) return;
-
-        const childBranches = Array.from(
-          childrenRow.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]")
-        );
-        const childAnchors = childBranches
-          .map((childBranch) =>
-            childBranch.querySelector<HTMLElement>(
-              ':scope > .couple-row > .tree-person[data-primary-anchor="true"] .person-card'
-            )
-          )
-          .filter((anchor): anchor is HTMLElement => {
-            const treePerson = anchor?.closest<HTMLElement>(".tree-person");
-            return Boolean(anchor) && Boolean(treePerson) && treePerson?.dataset.timelineVisible !== "false";
-          });
-
-        if (childAnchors.length === 0) return;
-        const visibleParentPeople = getCoupleRowPeople(coupleRow).filter(
-          (treePerson) => treePerson.dataset.timelineVisible !== "false"
-        );
-        if (visibleParentPeople.length === 0) return;
-
-        const coupleRect = coupleRow.getBoundingClientRect();
-        const childrenRect = childrenRow.getBoundingClientRect();
-        const visiblePartnerConnectors = Array.from(
-          coupleRow.querySelectorAll<HTMLElement>(":scope .partner-connector:not(.timeline-hidden)")
-        );
-        const parentAnchorRect =
-          visiblePartnerConnectors.length > 0
-            ? getCenteredRect(visiblePartnerConnectors.map((element) => element.getBoundingClientRect()))
-            : coupleRect;
-        const relationshipX = toLocalX(parentAnchorRect.left - stageRect.left + parentAnchorRect.width / 2);
-        const parentBottomY = toLocalY(parentAnchorRect.bottom - stageRect.top);
-        const junctionY = toLocalY(childrenRect.top - stageRect.top);
-        const childPoints = childAnchors.map((anchor) => {
-          const anchorRect = anchor.getBoundingClientRect();
-          const childPersonId = anchor.closest<HTMLElement>(".tree-person")?.dataset.personId;
-          visibleParentPeople.forEach((parentPerson) => {
-            const parentPersonId = parentPerson.dataset.personId;
-            if (parentPersonId && childPersonId) {
-              nestedParentChildKeys.add(getParentChildKey(parentPersonId, childPersonId));
-            }
-          });
-          return {
-            x: toLocalX(anchorRect.left - stageRect.left + anchorRect.width / 2),
-            y: toLocalY(anchorRect.top - stageRect.top)
-          };
-        });
-        const childCenterX = childPoints.reduce((total, point) => total + point.x, 0) / childPoints.length;
-        const horizontalXs = [relationshipX, childCenterX, ...childPoints.map((point) => point.x)];
-        const minX = Math.min(...horizontalXs);
-        const maxX = Math.max(...horizontalXs);
-
-        nextConnectors.push({ d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
-        if (maxX - minX > 0.5) {
-          nextConnectors.push({ d: `M ${formatCoord(minX)} ${formatCoord(junctionY)} H ${formatCoord(maxX)}` });
-        }
-        childPoints.forEach((point) => {
-          nextConnectors.push({
-            d: `M ${formatCoord(point.x)} ${formatCoord(junctionY)} V ${formatCoord(point.y)}`
-          });
-        });
-
-      });
-
-      relationships
-        .filter((relationship) => relationship.kind === "parent_child")
-        .forEach((relationship) => {
-          const relationshipKey = getParentChildKey(relationship.fromPersonId, relationship.toPersonId);
-          if (nestedParentChildKeys.has(relationshipKey)) return;
-
-          const parentPerson = stage.querySelector<HTMLElement>(
-            `.tree-person[data-person-id="${cssEscape(relationship.fromPersonId)}"]`
-          );
-          const childPerson = stage.querySelector<HTMLElement>(
-            `.tree-person[data-person-id="${cssEscape(relationship.toPersonId)}"]`
-          );
-          if (
-            !parentPerson ||
-            !childPerson ||
-            parentPerson.dataset.timelineVisible === "false" ||
-            childPerson.dataset.timelineVisible === "false"
-          ) {
-            return;
-          }
-
-          const parentCard = parentPerson.querySelector<HTMLElement>(".person-card");
-          const childCard = childPerson.querySelector<HTMLElement>(".person-card");
-          if (!parentCard || !childCard) return;
-
-          const parentRect = parentCard.getBoundingClientRect();
-          const childRect = childCard.getBoundingClientRect();
-          const parentX = toLocalX(parentRect.left - stageRect.left + parentRect.width / 2);
-          const parentY = toLocalY(parentRect.bottom - stageRect.top);
-          const childX = toLocalX(childRect.left - stageRect.left + childRect.width / 2);
-          const childY = toLocalY(childRect.top - stageRect.top);
-          const midY = parentY < childY ? parentY + (childY - parentY) / 2 : parentY + 28;
-
-          nextConnectors.push({
-            d: `M ${formatCoord(parentX)} ${formatCoord(parentY)} V ${formatCoord(midY)} H ${formatCoord(childX)} V ${formatCoord(childY)}`
-          });
-        });
-
-      setConnectorSize({
-        width: Math.max(1, Math.ceil(stage.scrollWidth)),
-        height: Math.max(1, Math.ceil(stage.scrollHeight))
-      });
-      setConnectors(nextConnectors);
-      const generationYs = getUniqueGenerationYs(nextGenerationYs);
-      setGenerationGuides(
-        generationYs.map((y, index) => ({
-          y,
-          label: `${index + 1} GEN`,
-          startYear: getGenerationStartYear(stage, stageRect, generationYs, y, toLocalY)
-        }))
-      );
-    };
-
-    updateConnectors();
-
-    const resizeObserver = new ResizeObserver(updateConnectors);
-    resizeObserver.observe(stage);
-    stage.querySelectorAll("[data-tree-branch-id], .person-card").forEach((element) => {
-      resizeObserver.observe(element);
-    });
-    window.addEventListener("resize", updateConnectors);
-
-    return () => {
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", updateConnectors);
-    };
-  }, [nodes, relationships, displaySettings, viewportScale, visiblePersonIds, visiblePartnerRelationshipKeys]);
+  const layout = useMemo(
+    () => buildTreeLayout(nodes, fallbackPeople, relationships, visiblePersonIds, visiblePartnerRelationshipKeys),
+    [nodes, fallbackPeople, relationships, visiblePersonIds, visiblePartnerRelationshipKeys]
+  );
 
   if (nodes.length === 0) return null;
 
   return (
-    <div className="tree-stage" ref={stageRef} aria-label="Vertical family tree">
+    <div
+      className="tree-stage tree-stage-positioned"
+      style={{ width: `${layout.width}px`, height: `${layout.height}px` }}
+      aria-label="Vertical family tree"
+    >
       {displaySettings.showGenerationLines ? (
         <svg
           className="tree-generation-guides-svg"
-          width={connectorSize.width}
-          height={connectorSize.height}
-          viewBox={`0 0 ${connectorSize.width} ${connectorSize.height}`}
+          width={layout.width}
+          height={layout.height}
+          viewBox={`0 0 ${layout.width} ${layout.height}`}
           aria-hidden="true"
         >
-          {generationGuides.map((guide) => (
+          {layout.generationGuides.map((guide) => (
             <g key={`${guide.label}-${guide.y}`}>
-              <path d={`M 0 ${guide.y} H ${connectorSize.width}`} />
+              <path d={`M 0 ${guide.y} H ${layout.width}`} />
             </g>
           ))}
         </svg>
       ) : null}
       {displaySettings.showGenerationLines ? (
         <div className="tree-generation-labels" aria-hidden="true">
-          {generationGuides.map((guide) => (
+          {layout.generationGuides.map((guide) => (
             <span key={`${guide.label}-${guide.y}`} style={{ top: `${guide.y}px` }}>
               <strong>{guide.label}</strong>
               {guide.startYear ? <small>{guide.startYear}</small> : null}
@@ -258,42 +142,320 @@ export function TreeView({
       ) : null}
       <svg
         className="tree-connectors-svg"
-        width={connectorSize.width}
-        height={connectorSize.height}
-        viewBox={`0 0 ${connectorSize.width} ${connectorSize.height}`}
+        width={layout.width}
+        height={layout.height}
+        viewBox={`0 0 ${layout.width} ${layout.height}`}
         aria-hidden="true"
       >
-        {connectors.map((connector, index) => (
+        {layout.connectors.map((connector, index) => (
           <path key={`${connector.d}-${index}`} d={connector.d} />
         ))}
       </svg>
-      <div className={nodes.length > 1 ? "tree-forest" : undefined}>
-        {nodes.map((branch, index) => (
-          <TreeBranch
-            key={branch.person?.id ?? `root-${index}`}
-            branchKey={branch.person?.id ?? `root-${index}`}
-            externalSide={getBranchSide(index, nodes.length)}
-            rootGenerationOffset={branch.generation ?? 0}
-            node={branch}
-            fallbackPeople={fallbackPeople}
-            relationships={relationships}
-            selectedId={selectedId}
-            onSelect={onSelect}
-            onAddRelative={onAddRelative}
-            addLabels={addLabels}
-            lifeLabels={lifeLabels}
-            displaySettings={displaySettings}
-            clinicalConditions={clinicalConditions}
-            clinicalCategories={clinicalCategories}
-            parentCounts={parentCounts}
-            visiblePersonIds={visiblePersonIds}
-            visiblePartnerRelationshipKeys={visiblePartnerRelationshipKeys}
-            flagBackgrounds={flagBackgrounds}
-          />
-        ))}
-      </div>
+      {layout.relationships.map((relationship, index) => (
+        <span
+          className="tree-relationship-slot"
+          style={{ left: `${relationship.x}px`, top: `${relationship.y}px` }}
+          key={`${relationship.x}-${relationship.y}-${index}`}
+        >
+          <PartnerConnector hidden={relationship.hidden} startDate={relationship.startDate} />
+        </span>
+      ))}
+      {layout.people.map((entry) => (
+        <TreePerson
+          key={entry.person.id}
+          person={entry.person}
+          primaryAnchor={entry.primaryAnchor}
+          selected={selectedId === entry.person.id}
+          timelineVisible={isTimelineVisible(entry.person.id, visiblePersonIds)}
+          compact
+          style={{ left: `${entry.x}px`, top: `${entry.y}px` }}
+          onSelect={onSelect}
+          onAddRelative={onAddRelative}
+          addLabels={addLabels}
+          lifeLabels={lifeLabels}
+          displaySettings={displaySettings}
+          clinicalConditions={clinicalConditions}
+          clinicalCategories={clinicalCategories}
+          canAddParent={(parentCounts[entry.person.id] ?? 0) < 2}
+          flagPortraitUrl={flagBackgrounds?.[entry.person.id]}
+        />
+      ))}
     </div>
   );
+}
+
+function buildTreeLayout(
+  nodes: TreeNode[],
+  people: Person[],
+  relationships: Relationship[],
+  visiblePersonIds?: Set<string>,
+  visiblePartnerRelationshipKeys?: Set<string>
+): TreeLayout {
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const generations = buildPersonGenerations(people, relationships);
+  const sortedRoots = sortRootNodesByDescendant(nodes, relationships, people);
+  const rootLayouts = sortedRoots.map((root, index) =>
+    buildLayoutBranch(root, {
+      peopleById,
+      relationships,
+      generations,
+      visiblePersonIds,
+      visiblePartnerRelationshipKeys,
+      externalSide: getBranchSide(index, sortedRoots.length)
+    })
+  );
+  const widthWithoutPadding =
+    rootLayouts.reduce((total, branch) => total + branch.width, 0) +
+    TREE_BRANCH_GAP * Math.max(0, rootLayouts.length - 1);
+  const contentWidth = Math.max(TREE_CARD_WIDTH, widthWithoutPadding);
+  const peopleEntries: TreeLayoutPerson[] = [];
+  const relationshipEntries: TreeLayoutRelationship[] = [];
+  const connectors: TreeConnector[] = [];
+  let cursor = TREE_LEFT_PADDING;
+
+  rootLayouts.forEach((branch) => {
+    peopleEntries.push(...offsetLayoutPeople(branch.people, cursor, 0));
+    relationshipEntries.push(...offsetLayoutRelationships(branch.relationships, cursor, 0));
+    connectors.push(...offsetLayoutConnectors(branch.connectors, cursor, 0));
+    cursor += branch.width + TREE_BRANCH_GAP;
+  });
+
+  const dedupedPeople = dedupeLayoutPeople(peopleEntries);
+  const maxY = Math.max(
+    TREE_CARD_HEIGHT,
+    ...dedupedPeople.map((entry) => entry.y + TREE_CARD_HEIGHT),
+    ...connectors.flatMap((connector) => extractPathNumbers(connector.d).filter((_, index) => index % 2 === 1))
+  );
+  const maxX = Math.max(
+    contentWidth + TREE_LEFT_PADDING + TREE_RIGHT_PADDING,
+    ...dedupedPeople.map((entry) => entry.x + TREE_CARD_WIDTH + TREE_RIGHT_PADDING)
+  );
+  const generationGuides = buildGenerationGuides(dedupedPeople);
+
+  return {
+    width: Math.ceil(maxX),
+    height: Math.ceil(maxY + TREE_BOTTOM_PADDING),
+    people: dedupedPeople,
+    relationships: relationshipEntries,
+    connectors,
+    generationGuides
+  };
+}
+
+function buildLayoutBranch(
+  node: TreeNode,
+  context: {
+    peopleById: Map<string, Person>;
+    relationships: Relationship[];
+    generations: Map<string, number>;
+    visiblePersonIds?: Set<string>;
+    visiblePartnerRelationshipKeys?: Set<string>;
+    externalSide?: BranchSide;
+  }
+): LayoutBranch {
+  if (!node.person) {
+    const sortedChildren = sortRootNodesByDescendant(node.children, context.relationships, Array.from(context.peopleById.values()));
+    const childLayouts = sortedChildren.map((child, index) =>
+      buildLayoutBranch(child, { ...context, externalSide: getBranchSide(index, sortedChildren.length) })
+    );
+    const width = Math.max(
+      TREE_CARD_WIDTH,
+      childLayouts.reduce((total, child) => total + child.width, 0) +
+        TREE_BRANCH_GAP * Math.max(0, childLayouts.length - 1)
+    );
+    const peopleEntries: TreeLayoutPerson[] = [];
+    const relationshipEntries: TreeLayoutRelationship[] = [];
+    const connectors: TreeConnector[] = [];
+    let cursor = 0;
+
+    childLayouts.forEach((child) => {
+      peopleEntries.push(...offsetLayoutPeople(child.people, cursor, 0));
+      relationshipEntries.push(...offsetLayoutRelationships(child.relationships, cursor, 0));
+      connectors.push(...offsetLayoutConnectors(child.connectors, cursor, 0));
+      cursor += child.width + TREE_BRANCH_GAP;
+    });
+
+    return {
+      width,
+      height: Math.max(0, ...childLayouts.map((child) => child.height)),
+      anchorX: width / 2,
+      people: peopleEntries,
+      relationships: relationshipEntries,
+      connectors
+    };
+  }
+
+  const person = node.person;
+  const visiblePartners = node.partners.filter((partner) => isTimelineVisible(partner.id, context.visiblePersonIds));
+  const sortedChildren = sortSiblingTreeNodes(node.children);
+  const childLayouts = sortedChildren.map((child, index) =>
+    buildLayoutBranch(child, { ...context, externalSide: getBranchSide(index, sortedChildren.length) })
+  );
+  const partnersOnLeft = context.externalSide === "left";
+  const couple = buildCoupleLayout(person, visiblePartners, partnersOnLeft, context);
+  const childrenWidth =
+    childLayouts.reduce((total, child) => total + child.width, 0) +
+    TREE_BRANCH_GAP * Math.max(0, childLayouts.length - 1);
+  const hasChildren = childLayouts.length > 0;
+  const childCenter = hasChildren ? childrenWidth / 2 : couple.anchorX;
+  const coupleOffset = hasChildren ? childCenter - couple.anchorX : 0;
+  const minX = Math.min(0, coupleOffset);
+  const maxX = Math.max(hasChildren ? childrenWidth : 0, coupleOffset + couple.width);
+  const normalizeX = -minX;
+  const width = Math.max(TREE_CARD_WIDTH, maxX - minX);
+  const generation = context.generations.get(person.id) ?? node.generation ?? 0;
+  const y = TREE_TOP_PADDING + generation * TREE_GENERATION_ROW_HEIGHT;
+  const peopleEntries = offsetLayoutPeople(couple.people, coupleOffset + normalizeX, y);
+  const relationshipEntries = offsetLayoutRelationships(couple.relationships, coupleOffset + normalizeX, y);
+  const connectors: TreeConnector[] = [];
+  const childPeople: TreeLayoutPerson[] = [];
+  const childRelationships: TreeLayoutRelationship[] = [];
+  const childConnectors: TreeConnector[] = [];
+  let childCursor = normalizeX;
+
+  childLayouts.forEach((child) => {
+    childPeople.push(...offsetLayoutPeople(child.people, childCursor, 0));
+    childRelationships.push(...offsetLayoutRelationships(child.relationships, childCursor, 0));
+    childConnectors.push(...offsetLayoutConnectors(child.connectors, childCursor, 0));
+    childCursor += child.width + TREE_BRANCH_GAP;
+  });
+
+  if (childLayouts.length > 0) {
+    const relationshipX = coupleOffset + normalizeX + couple.anchorX;
+    const relationshipY = y + (TREE_CARD_HEIGHT - 30) / 2 + 30;
+    const childPoints = childLayouts.map((child, index) => {
+      const xOffset =
+        normalizeX +
+        childLayouts.slice(0, index).reduce((total, previous) => total + previous.width + TREE_BRANCH_GAP, 0);
+      const firstVisiblePerson = child.people.find((entry) => isTimelineVisible(entry.person.id, context.visiblePersonIds));
+      return {
+        x: xOffset + child.anchorX,
+        y: firstVisiblePerson?.y ?? TREE_TOP_PADDING + ((child.people[0] ? context.generations.get(child.people[0].person.id) : generation + 1) ?? generation + 1) * TREE_GENERATION_ROW_HEIGHT
+      };
+    });
+    const junctionY = Math.min(...childPoints.map((point) => point.y)) - 34;
+    const minChildX = Math.min(...childPoints.map((point) => point.x), relationshipX);
+    const maxChildX = Math.max(...childPoints.map((point) => point.x), relationshipX);
+
+    connectors.push({
+      d: `M ${formatCoord(relationshipX)} ${formatCoord(relationshipY)} V ${formatCoord(junctionY)}`
+    });
+    if (maxChildX - minChildX > 0.5) {
+      connectors.push({ d: `M ${formatCoord(minChildX)} ${formatCoord(junctionY)} H ${formatCoord(maxChildX)}` });
+    }
+    childPoints.forEach((point) => {
+      connectors.push({
+        d: `M ${formatCoord(point.x)} ${formatCoord(junctionY)} V ${formatCoord(point.y)}`
+      });
+    });
+  }
+
+  return {
+    width,
+    height: Math.max(y + TREE_CARD_HEIGHT, ...childLayouts.map((child) => child.height)),
+    anchorX: coupleOffset + normalizeX + couple.anchorX,
+    people: [...peopleEntries, ...childPeople],
+    relationships: [...relationshipEntries, ...childRelationships],
+    connectors: [...connectors, ...childConnectors]
+  };
+}
+
+function buildCoupleLayout(
+  person: Person,
+  partners: Person[],
+  partnersOnLeft: boolean,
+  context: {
+    relationships: Relationship[];
+    visiblePersonIds?: Set<string>;
+    visiblePartnerRelationshipKeys?: Set<string>;
+  }
+) {
+  const peopleEntries: TreeLayoutPerson[] = [];
+  const relationshipEntries: TreeLayoutRelationship[] = [];
+  const partnerGap = TREE_PARTNER_GAP * 2 + TREE_PARTNER_CONNECTOR_WIDTH;
+  const width = TREE_CARD_WIDTH + partners.length * (partnerGap + TREE_CARD_WIDTH);
+  let personX = partnersOnLeft ? width - TREE_CARD_WIDTH : 0;
+
+  peopleEntries.push({ person, x: personX, y: 0, primaryAnchor: true });
+
+  partners.forEach((partner, index) => {
+    const partnerX = partnersOnLeft
+      ? personX - (index + 1) * (TREE_CARD_WIDTH + partnerGap)
+      : personX + TREE_CARD_WIDTH + partnerGap + index * (TREE_CARD_WIDTH + partnerGap);
+    const connectorX = partnersOnLeft
+      ? partnerX + TREE_CARD_WIDTH + TREE_PARTNER_GAP
+      : personX + TREE_CARD_WIDTH + TREE_PARTNER_GAP + index * (TREE_CARD_WIDTH + partnerGap);
+    const startDate = getPartnerRelationshipStartDate(person.id, partner.id, context.relationships);
+
+    peopleEntries.push({ person: partner, x: partnerX, y: 0 });
+    relationshipEntries.push({
+      x: connectorX,
+      y: (TREE_CARD_HEIGHT - 30) / 2,
+      hidden:
+        !isTimelineVisible(person.id, context.visiblePersonIds) ||
+        !isTimelineVisible(partner.id, context.visiblePersonIds) ||
+        !isTimelinePartnerVisible(person.id, partner.id, context.visiblePartnerRelationshipKeys),
+      startDate
+    });
+  });
+
+  const visibleRelationships = relationshipEntries.filter((relationship) => !relationship.hidden);
+  const anchorX =
+    visibleRelationships.length > 0
+      ? visibleRelationships.reduce((total, relationship) => total + relationship.x + TREE_PARTNER_CONNECTOR_WIDTH / 2, 0) /
+        visibleRelationships.length
+      : personX + TREE_CARD_WIDTH / 2;
+
+  return { width, anchorX, people: peopleEntries, relationships: relationshipEntries };
+}
+
+function offsetLayoutPeople(people: TreeLayoutPerson[], x: number, y: number) {
+  return people.map((entry) => ({ ...entry, x: entry.x + x, y: entry.y + y }));
+}
+
+function offsetLayoutRelationships(relationships: TreeLayoutRelationship[], x: number, y: number) {
+  return relationships.map((entry) => ({ ...entry, x: entry.x + x, y: entry.y + y }));
+}
+
+function offsetLayoutConnectors(connectors: TreeConnector[], x: number, y: number) {
+  if (x === 0 && y === 0) return connectors;
+  return connectors.map((connector) => ({
+    d: connector.d.replace(/([MLHV])\s*([-\d.]+)(?:\s+([-\d.]+))?/g, (_match, command, first, second) => {
+      if (command === "H") return `H ${formatCoord(Number(first) + x)}`;
+      if (command === "V") return `V ${formatCoord(Number(first) + y)}`;
+      return `${command} ${formatCoord(Number(first) + x)} ${formatCoord(Number(second) + y)}`;
+    })
+  }));
+}
+
+function dedupeLayoutPeople(people: TreeLayoutPerson[]) {
+  const seen = new Set<string>();
+  return people.filter((entry) => {
+    if (seen.has(entry.person.id)) return false;
+    seen.add(entry.person.id);
+    return true;
+  });
+}
+
+function buildGenerationGuides(people: TreeLayoutPerson[]) {
+  const rows = new Map<number, number[]>();
+  people.forEach((entry) => {
+    if (!rows.has(entry.y)) rows.set(entry.y, []);
+    const birthYear = extractBirthYear(entry.person.birthDate);
+    if (birthYear !== null) rows.get(entry.y)?.push(birthYear);
+  });
+
+  return Array.from(rows.entries())
+    .sort((first, second) => first[0] - second[0])
+    .map(([y, years], index) => ({
+      y: y + TREE_CARD_HEIGHT / 2,
+      label: `${index + 1} GEN`,
+      startYear: years.length > 0 ? Math.min(...years) : undefined
+    }));
+}
+
+function extractPathNumbers(path: string) {
+  return Array.from(path.matchAll(/-?\d+(?:\.\d+)?/g)).map((match) => Number(match[0]));
 }
 
 function TreeBranch({
@@ -645,170 +807,6 @@ function getDescendantAnchorRank(
   return fallbackPerson ? (peopleRank.get(fallbackPerson.id) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
 }
 
-function getGenerationStartYear(
-  stage: HTMLElement,
-  stageRect: DOMRect,
-  generationYs: number[],
-  generationY: number,
-  toLocalY: (value: number) => number
-) {
-  const years = Array.from(stage.querySelectorAll<HTMLElement>(".tree-person")).flatMap((treePerson) => {
-    if (treePerson.dataset.timelineVisible === "false") return [];
-    const birthYear = Number(treePerson.dataset.birthYear);
-    if (!Number.isFinite(birthYear)) return [];
-    const card = treePerson.querySelector<HTMLElement>(".person-card");
-    if (!card) return [];
-    const rect = card.getBoundingClientRect();
-    const personY = toLocalY(rect.top - stageRect.top + rect.height / 2);
-    const nearestGenerationY = generationYs.reduce((nearest, candidate) =>
-      Math.abs(candidate - personY) < Math.abs(nearest - personY) ? candidate : nearest
-    );
-
-    return Math.abs(nearestGenerationY - generationY) < 4 ? [birthYear] : [];
-  });
-
-  return years.length > 0 ? Math.min(...years) : undefined;
-}
-
-function getUniqueGenerationYs(values: number[]) {
-  return values
-    .filter((value) => Number.isFinite(value))
-    .sort((first, second) => first - second)
-    .reduce<number[]>((uniqueValues, value) => {
-      const previous = uniqueValues[uniqueValues.length - 1];
-      if (previous === undefined || Math.abs(previous - value) > 24) {
-        uniqueValues.push(value);
-      }
-      return uniqueValues;
-    }, []);
-}
-
-function settleTreeRows(stage: HTMLElement, scaleX: number) {
-  stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]").forEach((branch) => {
-    branch.style.setProperty("--tree-compact-x", "0px");
-  });
-  stage.querySelectorAll<HTMLElement>(".children-row").forEach((childrenRow) => {
-    childrenRow.style.setProperty("--tree-children-align-x", "0px");
-  });
-
-  for (let pass = 0; pass < TREE_LAYOUT_SETTLE_PASSES; pass += 1) {
-    compactSiblingRows(stage, scaleX);
-    alignChildrenRowsToParents(stage, scaleX);
-  }
-}
-
-function compactSiblingRows(stage: HTMLElement, scaleX: number) {
-  const rows = Array.from(stage.querySelectorAll<HTMLElement>(".children-row")).sort(
-    (first, second) => getDomDepth(second) - getDomDepth(first)
-  );
-
-  rows.forEach((row) => {
-    const childBranches = Array.from(row.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]"));
-    if (childBranches.length < 2) return;
-
-    const entries = childBranches
-      .map((branch) => {
-        const anchor = branch.querySelector<HTMLElement>(
-          ':scope > .couple-row > .tree-person[data-primary-anchor="true"] .person-card'
-        );
-        const treePerson = anchor?.closest<HTMLElement>(".tree-person");
-        if (!anchor || treePerson?.dataset.timelineVisible === "false") return null;
-        const rect = anchor.getBoundingClientRect();
-
-        return {
-          branch,
-          center: rect.left + rect.width / 2,
-          width: rect.width
-        };
-      })
-      .filter((entry): entry is { branch: HTMLElement; center: number; width: number } => Boolean(entry))
-      .sort((first, second) => first.center - second.center);
-
-    if (entries.length < 2) return;
-
-    const desiredGap = TREE_SIBLING_CARD_GAP * scaleX;
-    const desiredSpan =
-      entries.reduce((total, entry) => total + entry.width, 0) + desiredGap * Math.max(0, entries.length - 1);
-    const currentMidpoint = (entries[0].center + entries[entries.length - 1].center) / 2;
-    let cursor = currentMidpoint - desiredSpan / 2;
-
-    entries.forEach((entry) => {
-      const desiredCenter = cursor + entry.width / 2;
-      const screenShift = desiredCenter - entry.center;
-      const localDelta = screenShift / (scaleX || 1);
-      const nextShift = Math.max(
-        -TREE_MAX_SIBLING_COMPACTION,
-        Math.min(TREE_MAX_SIBLING_COMPACTION, getCssPixelValue(entry.branch, "--tree-compact-x") + localDelta)
-      );
-
-      if (Math.abs(nextShift) > 1) {
-        entry.branch.style.setProperty("--tree-compact-x", `${formatCoord(nextShift)}px`);
-      }
-
-      cursor += entry.width + desiredGap;
-    });
-  });
-}
-
-function alignChildrenRowsToParents(stage: HTMLElement, scaleX: number) {
-  const branches = Array.from(stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]")).sort(
-    (first, second) => getDomDepth(first) - getDomDepth(second)
-  );
-
-  branches.forEach((branch) => {
-    const coupleRow = branch.querySelector<HTMLElement>(":scope > .couple-row");
-    const childrenRow = branch.querySelector<HTMLElement>(":scope > .children-row");
-    if (!coupleRow || !childrenRow) return;
-
-    const visiblePartnerConnectors = Array.from(
-      coupleRow.querySelectorAll<HTMLElement>(":scope .partner-connector:not(.timeline-hidden)")
-    );
-    const parentCards = getCoupleRowPeople(coupleRow)
-      .filter((treePerson) => treePerson.dataset.timelineVisible !== "false")
-      .map((treePerson) => treePerson.querySelector<HTMLElement>(".person-card"))
-      .filter((card): card is HTMLElement => Boolean(card));
-    const childCards = Array.from(childrenRow.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]"))
-      .map((childBranch) =>
-        childBranch.querySelector<HTMLElement>(
-          ':scope > .couple-row > .tree-person[data-primary-anchor="true"] .person-card'
-        )
-      )
-      .filter((card): card is HTMLElement => {
-        const treePerson = card?.closest<HTMLElement>(".tree-person");
-        return Boolean(card) && treePerson?.dataset.timelineVisible !== "false";
-      });
-
-    if (parentCards.length === 0 || childCards.length === 0) return;
-
-    const parentRect =
-      visiblePartnerConnectors.length > 0
-        ? getCenteredRect(visiblePartnerConnectors.map((connector) => connector.getBoundingClientRect()))
-        : getCenteredRect(parentCards.map((card) => card.getBoundingClientRect()));
-    const childRect = getCenteredRect(childCards.map((card) => card.getBoundingClientRect()));
-    const parentCenter = parentRect.left + parentRect.width / 2;
-    const childCenter = childRect.left + childRect.width / 2;
-    const localDelta = (parentCenter - childCenter) / (scaleX || 1);
-    const nextShift = Math.max(
-      -TREE_MAX_CHILDREN_ALIGNMENT,
-      Math.min(TREE_MAX_CHILDREN_ALIGNMENT, getCssPixelValue(childrenRow, "--tree-children-align-x") + localDelta)
-    );
-
-    if (Math.abs(nextShift) > 1) {
-      childrenRow.style.setProperty("--tree-children-align-x", `${formatCoord(nextShift)}px`);
-    }
-  });
-}
-
-function getDomDepth(element: HTMLElement) {
-  let depth = 0;
-  let current = element.parentElement;
-  while (current) {
-    depth += 1;
-    current = current.parentElement;
-  }
-  return depth;
-}
-
 function getBranchSide(index: number, total: number): BranchSide | undefined {
   if (total <= 1) return undefined;
 
@@ -938,7 +936,8 @@ function TreePerson({
   canAddParent,
   primaryAnchor,
   timelineVisible = true,
-  flagPortraitUrl
+  flagPortraitUrl,
+  style
 }: {
   person: Person;
   selected: boolean;
@@ -954,10 +953,12 @@ function TreePerson({
   primaryAnchor?: boolean;
   timelineVisible?: boolean;
   flagPortraitUrl?: string;
+  style?: CSSProperties;
 }) {
   return (
     <div
       className={`tree-person ${timelineVisible ? "" : "timeline-hidden"}`}
+      style={style}
       data-primary-anchor={primaryAnchor ? "true" : undefined}
       data-person-id={person.id}
       data-birth-year={extractBirthYear(person.birthDate) ?? undefined}
