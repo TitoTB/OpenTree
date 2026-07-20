@@ -22,8 +22,9 @@ type GenerationGuide = {
 type BranchSide = "left" | "right";
 const TREE_GENERATION_ROW_HEIGHT = 170;
 const TREE_SIBLING_CARD_GAP = 24;
-const TREE_MAX_SIBLING_COMPACTION = 180;
-const TREE_MAX_CHILDREN_ALIGNMENT = 360;
+const TREE_MAX_SIBLING_COMPACTION = 520;
+const TREE_MAX_CHILDREN_ALIGNMENT = 620;
+const TREE_LAYOUT_SETTLE_PASSES = 3;
 
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
@@ -75,8 +76,7 @@ export function TreeView({
     const updateConnectors = () => {
       let stageRect = stage.getBoundingClientRect();
       let scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
-      compactSiblingRows(stage, scaleX || 1);
-      alignChildrenRowsToParents(stage, scaleX || 1);
+      settleTreeRows(stage, scaleX || 1);
       stageRect = stage.getBoundingClientRect();
       scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
       const scaleY = stage.offsetHeight > 0 ? stageRect.height / stage.offsetHeight : scaleX;
@@ -683,12 +683,26 @@ function getUniqueGenerationYs(values: number[]) {
     }, []);
 }
 
-function compactSiblingRows(stage: HTMLElement, scaleX: number) {
+function settleTreeRows(stage: HTMLElement, scaleX: number) {
   stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]").forEach((branch) => {
     branch.style.setProperty("--tree-compact-x", "0px");
   });
+  stage.querySelectorAll<HTMLElement>(".children-row").forEach((childrenRow) => {
+    childrenRow.style.setProperty("--tree-children-align-x", "0px");
+  });
 
-  stage.querySelectorAll<HTMLElement>(".children-row").forEach((row) => {
+  for (let pass = 0; pass < TREE_LAYOUT_SETTLE_PASSES; pass += 1) {
+    compactSiblingRows(stage, scaleX);
+    alignChildrenRowsToParents(stage, scaleX);
+  }
+}
+
+function compactSiblingRows(stage: HTMLElement, scaleX: number) {
+  const rows = Array.from(stage.querySelectorAll<HTMLElement>(".children-row")).sort(
+    (first, second) => getDomDepth(second) - getDomDepth(first)
+  );
+
+  rows.forEach((row) => {
     const childBranches = Array.from(row.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]"));
     if (childBranches.length < 2) return;
 
@@ -721,13 +735,14 @@ function compactSiblingRows(stage: HTMLElement, scaleX: number) {
     entries.forEach((entry) => {
       const desiredCenter = cursor + entry.width / 2;
       const screenShift = desiredCenter - entry.center;
-      const localShift = Math.max(
+      const localDelta = screenShift / (scaleX || 1);
+      const nextShift = Math.max(
         -TREE_MAX_SIBLING_COMPACTION,
-        Math.min(TREE_MAX_SIBLING_COMPACTION, screenShift / (scaleX || 1))
+        Math.min(TREE_MAX_SIBLING_COMPACTION, getCssPixelValue(entry.branch, "--tree-compact-x") + localDelta)
       );
 
-      if (Math.abs(localShift) > 1) {
-        entry.branch.style.setProperty("--tree-compact-x", `${formatCoord(localShift)}px`);
+      if (Math.abs(nextShift) > 1) {
+        entry.branch.style.setProperty("--tree-compact-x", `${formatCoord(nextShift)}px`);
       }
 
       cursor += entry.width + desiredGap;
@@ -736,10 +751,6 @@ function compactSiblingRows(stage: HTMLElement, scaleX: number) {
 }
 
 function alignChildrenRowsToParents(stage: HTMLElement, scaleX: number) {
-  stage.querySelectorAll<HTMLElement>(".children-row").forEach((childrenRow) => {
-    childrenRow.style.setProperty("--tree-children-align-x", "0px");
-  });
-
   const branches = Array.from(stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]")).sort(
     (first, second) => getDomDepth(first) - getDomDepth(second)
   );
@@ -776,13 +787,14 @@ function alignChildrenRowsToParents(stage: HTMLElement, scaleX: number) {
     const childRect = getCenteredRect(childCards.map((card) => card.getBoundingClientRect()));
     const parentCenter = parentRect.left + parentRect.width / 2;
     const childCenter = childRect.left + childRect.width / 2;
-    const localShift = Math.max(
+    const localDelta = (parentCenter - childCenter) / (scaleX || 1);
+    const nextShift = Math.max(
       -TREE_MAX_CHILDREN_ALIGNMENT,
-      Math.min(TREE_MAX_CHILDREN_ALIGNMENT, (parentCenter - childCenter) / (scaleX || 1))
+      Math.min(TREE_MAX_CHILDREN_ALIGNMENT, getCssPixelValue(childrenRow, "--tree-children-align-x") + localDelta)
     );
 
-    if (Math.abs(localShift) > 1) {
-      childrenRow.style.setProperty("--tree-children-align-x", `${formatCoord(localShift)}px`);
+    if (Math.abs(nextShift) > 1) {
+      childrenRow.style.setProperty("--tree-children-align-x", `${formatCoord(nextShift)}px`);
     }
   });
 }
@@ -830,6 +842,12 @@ function getCoupleRowPeople(coupleRow: HTMLElement) {
 
 function formatCoord(value: number) {
   return Number(value.toFixed(2));
+}
+
+function getCssPixelValue(element: HTMLElement, propertyName: string) {
+  const rawValue = element.style.getPropertyValue(propertyName);
+  const parsedValue = Number.parseFloat(rawValue);
+  return Number.isFinite(parsedValue) ? parsedValue : 0;
 }
 
 function isTimelineVisible(personId: string, visiblePersonIds?: Set<string>) {
