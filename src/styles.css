@@ -6423,12 +6423,10 @@ button.calendar-day {
 }
 
 .couple-row {
-  --tree-parent-align-x: 0px;
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  transform: translateX(var(--tree-parent-align-x));
 }
 
 .couple-row > * {
@@ -6572,12 +6570,14 @@ button.calendar-day {
 
 .children-row {
   --sibling-gap: 14px;
+  --tree-children-align-x: 0px;
   position: relative;
   display: flex;
   justify-content: center;
   align-items: flex-start;
   gap: var(--sibling-gap);
   padding-top: 34px;
+  transform: translateX(var(--tree-children-align-x));
 }
 
 .modal-backdrop {
