@@ -6415,7 +6415,7 @@ button.calendar-day {
   align-items: center;
   gap: 0;
   min-width: max-content;
-  transform: translateX(var(--tree-compact-x));
+  margin-left: var(--tree-compact-x);
 }
 
 .tree-branch.has-children > .couple-row {
@@ -6577,7 +6577,7 @@ button.calendar-day {
   align-items: flex-start;
   gap: var(--sibling-gap);
   padding-top: 34px;
-  transform: translateX(var(--tree-children-align-x));
+  margin-left: var(--tree-children-align-x);
 }
 
 .modal-backdrop {
