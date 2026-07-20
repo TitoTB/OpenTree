@@ -295,14 +295,14 @@ p {
   --muted: #a6b9b4;
 }
 
-.theme-dark :where(.rail, .wizard-shell, .surname-panel, .settings-field, .toggle-row, .person-modal, .contribution-card, .empty-state, .readonly-field, .profile-notes, .profile-gallery-panel, .relationship-date-panel, .map-panel, .calendar-month, .people-table, .surname-list button, .origin-suggestion, .source-box, .clinical-search-card, .clinical-linked-card, .clinical-condition-card, .clinical-auto-info, .public-search-card, .public-link-form, .public-link-list, .public-link-card, .condition-catalog-card, .gallery-filter-strip) {
+.theme-dark :where(.rail, .wizard-shell, .surname-panel, .settings-field, .toggle-row, .person-modal, .contribution-card, .empty-state, .readonly-field, .profile-notes, .profile-gallery-panel, .relationship-date-panel, .map-panel, .calendar-month, .people-table, .unknowns-card, .surname-list button, .origin-suggestion, .source-box, .clinical-search-card, .clinical-linked-card, .clinical-condition-card, .clinical-auto-info, .public-search-card, .public-link-form, .public-link-list, .public-link-card, .condition-catalog-card, .gallery-filter-strip) {
   background: rgba(23, 33, 31, 0.94);
   border-color: var(--line);
   color: #e7f3ef;
   box-shadow: 0 18px 45px rgba(0, 0, 0, 0.24);
 }
 
-.theme-dark :where(.tree-canvas, .people-view, .surnames-view, .map-view, .calendar-view, .gallery-view, .conditions-view, .customization-view, .contributions-view) {
+.theme-dark :where(.tree-canvas, .people-view, .unknowns-view, .surnames-view, .map-view, .calendar-view, .gallery-view, .conditions-view, .customization-view, .contributions-view) {
   background: #101917;
 }
 
@@ -310,11 +310,11 @@ p {
   background-image: none;
 }
 
-.theme-dark :where(.canvas-header h1, .people-view-header h1, .surname-hero h2, .modal-header h2, .profile-identity h3, .readonly-field strong, .profile-gallery-heading > strong, .relationship-date-list span, .surname-panel h3, .calendar-month h2, .people-table-row, .contribution-card h2, .clinical-search-card strong, .clinical-linked-card > strong, .clinical-condition-card h4, .clinical-auto-info p, .public-search-card strong, .public-link-form > strong, .public-link-list > strong, .condition-catalog-card h2) {
+.theme-dark :where(.canvas-header h1, .people-view-header h1, .surname-hero h2, .modal-header h2, .profile-identity h3, .readonly-field strong, .profile-gallery-heading > strong, .relationship-date-list span, .surname-panel h3, .calendar-month h2, .people-table-row, .unknowns-card h2, .contribution-card h2, .clinical-search-card strong, .clinical-linked-card > strong, .clinical-condition-card h4, .clinical-auto-info p, .public-search-card strong, .public-link-form > strong, .public-link-list > strong, .condition-catalog-card h2) {
   color: #eefaf6;
 }
 
-.theme-dark :where(.wizard-copy p, .parent-grid p, .person-card small, .mini-profile p, .canvas-meta, .map-status, .surname-status, .settings-field small, .toggle-row small, .profile-identity p, .readonly-field span, .profile-notes p, .relationship-date-panel > strong, .people-table-row > span) {
+.theme-dark :where(.wizard-copy p, .parent-grid p, .person-card small, .mini-profile p, .canvas-meta, .map-status, .surname-status, .settings-field small, .toggle-row small, .profile-identity p, .readonly-field span, .profile-notes p, .relationship-date-panel > strong, .people-table-row > span, .view-intro, .unknowns-card small, .unknown-field span) {
   color: var(--muted);
 }
 
@@ -3749,6 +3749,11 @@ button.zodiac-badge:hover {
   font-weight: 900;
 }
 
+.ancestor-card-button {
+  justify-self: end;
+  width: max-content;
+}
+
 .ancestor-source-actions {
   display: flex;
   justify-content: flex-end;
@@ -3851,6 +3856,106 @@ button.zodiac-badge:hover {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid var(--line);
+}
+
+.view-intro {
+  max-width: 760px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.unknowns-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+
+.unknowns-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-soft);
+}
+
+.unknowns-card-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.unknowns-card-header h2 {
+  margin: 0;
+  color: #24332f;
+  font-size: 1.02rem;
+  line-height: 1.1;
+}
+
+.unknowns-card-header small {
+  display: inline-block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.unknown-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.unknown-field {
+  display: grid;
+  gap: 6px;
+}
+
+.unknown-field span {
+  color: #53615b;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.unknown-field input,
+.unknown-field select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #25312e;
+  background: var(--paper-warm);
+  font-weight: 800;
+  outline: 0;
+}
+
+.unknown-notices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.unknown-notices span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #7c2d12;
+  background: #ffedd5;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.unknowns-empty {
+  min-height: 280px;
 }
 
 .surnames-layout {
@@ -6462,7 +6567,7 @@ button.calendar-day {
 }
 
 .children-row {
-  --sibling-gap: 2px;
+  --sibling-gap: 14px;
   position: relative;
   display: flex;
   justify-content: center;
@@ -7066,6 +7171,15 @@ button.calendar-day {
     align-items: flex-start;
   }
 
+  .unknowns-card-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .unknowns-card-header .secondary-action {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
   .people-header-actions {
     flex-wrap: wrap;
   }
@@ -7118,6 +7232,7 @@ button.calendar-day {
   .main-stage,
   .tree-canvas,
   .people-view,
+  .unknowns-view,
   .surnames-view,
   .map-view,
   .calendar-view,

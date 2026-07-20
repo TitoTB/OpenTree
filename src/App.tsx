@@ -103,6 +103,7 @@ interface AncestorSearchResult {
 type MainView =
   | "tree"
   | "ancestors"
+  | "unknowns"
   | "people"
   | "surnames"
   | "map"
@@ -381,6 +382,11 @@ export function App() {
     setSidebarOpen(false);
   }
 
+  function showUnknownsView() {
+    setActiveView("unknowns");
+    setSidebarOpen(false);
+  }
+
   function showMapView(mode: "people" | "photos" | "migrations" = "people") {
     setInitialMapMode(mode);
     setActiveView("map");
@@ -435,6 +441,32 @@ export function App() {
   function showAncestorsView() {
     setActiveView("ancestors");
     setSidebarOpen(false);
+  }
+
+  function updatePersonFromUnknowns(personId: string, patch: Partial<Person>) {
+    if (!project) return;
+
+    const nextPeople = project.people.map((person) => {
+      if (person.id !== personId) return person;
+
+      const nextPerson = { ...person, ...patch };
+      if (patch.birthCity !== undefined || patch.birthCountry !== undefined) {
+        nextPerson.birthPlace = joinPlace(nextPerson.birthCity ?? "", nextPerson.birthCountry ?? "");
+      }
+      if (patch.isDeceased === false) {
+        nextPerson.deathDate = "";
+      }
+
+      return nextPerson;
+    });
+    const nextProject = {
+      ...project,
+      people: nextPeople,
+      updatedAt: new Date().toISOString()
+    };
+
+    setProject(nextProject);
+    saveProject(nextProject);
   }
 
   function showContributionsView() {
@@ -1855,6 +1887,10 @@ export function App() {
                 <Search size={15} />
                 <span>{t.ancestors}</span>
               </button>
+              <button className="tree-header-action" type="button" onClick={showUnknownsView}>
+                <Fingerprint size={15} />
+                <span>{t.unknowns}</span>
+              </button>
               <button className="tree-header-action" type="button" onClick={showSurnamesView}>
                 <FontAwesomeShieldIcon size={15} />
                 <span>{t.surnames}</span>
@@ -2006,6 +2042,16 @@ export function App() {
         </section>
       ) : activeView === "ancestors" ? (
         <AncestorsView people={project.people} relationships={project.relationships} t={t} onBack={showTreeView} />
+      ) : activeView === "unknowns" ? (
+        <UnknownsView
+          people={project.people}
+          parentCounts={parentCounts}
+          peopleGenerationLabels={peopleGenerationLabels}
+          t={t}
+          onBack={showTreeView}
+          onSelect={selectPerson}
+          onUpdatePerson={updatePersonFromUnknowns}
+        />
       ) : activeView === "people" ? (
         <section className="people-view">
           <header className="people-view-header">
@@ -2569,25 +2615,29 @@ function AncestorsView({
   ];
   const searchableSources: Array<{
     id: AncestorSearchSourceId;
+    eyebrow: string;
     title: string;
     description: string;
     url: string;
   }> = [
     {
       id: "pares",
-      title: "Portal de Archivos Españoles (PARES)",
+      eyebrow: "PARES",
+      title: "Portal de Archivos Españoles",
       description: t.paresDescription,
       url: "https://pares.cultura.gob.es/inicio.html"
     },
     {
       id: "familysearch",
-      title: "FamilySearch",
+      eyebrow: "FamilySearch",
+      title: "Familiares internacionales",
       description: t.familySearchDescription,
       url: "https://www.familysearch.org/es/global"
     },
     {
       id: "largo-caballero",
-      title: "Fundación Francisco Largo Caballero",
+      eyebrow: "Fundación Francisco Largo Caballero",
+      title: "Censo de represaliados de UGT",
       description: t.largoCaballeroDescription,
       url: "https://censorepresaliadosugt.es/s/public/faceted-browse/1"
     }
@@ -2642,30 +2692,25 @@ function AncestorsView({
               <span>{t.online}</span>
             </div>
             <p>{source.description}</p>
-            <span className="source-card-link">
+            <span className="ancestor-card-button primary-action compact-action">
               <SquareArrowOutUpRight size={17} />
-              {t.openExternalSource}
+              <span>{t.openExternalSource}</span>
             </span>
           </a>
         ))}
         {searchableSources.map((source) => (
           <article className="ancestor-source-card" key={source.id}>
             <div>
-              <span className="eyebrow">{t.ancestorSearchSource}</span>
+              <span className="eyebrow">{source.eyebrow}</span>
               <h2>{source.title}</h2>
             </div>
             <div className="ancestor-source-badges" aria-hidden="true">
-              <span>{t.free}</span>
               <span>{t.online}</span>
             </div>
             <p>{source.description}</p>
             <div className="ancestor-source-actions">
-              <a className="secondary-action compact-action" href={source.url} target="_blank" rel="noreferrer">
-                <SquareArrowOutUpRight size={16} />
-                <span>{t.openSource}</span>
-              </a>
               <button
-                className="primary-action compact-action"
+                className="ancestor-card-button primary-action compact-action"
                 type="button"
                 onClick={() => void consultSource(source.id)}
               >
@@ -3964,6 +4009,186 @@ function SurnameReadOnlyField({
       )}
     </div>
   );
+}
+
+type UnknownEditableField = {
+  key: "givenName" | "familyName" | "birthDate" | "birthTime" | "birthCity" | "birthCountry" | "deathDate";
+  label: string;
+  type?: string;
+  placeholder?: string;
+};
+
+function UnknownsView({
+  people,
+  parentCounts,
+  peopleGenerationLabels,
+  t,
+  onBack,
+  onSelect,
+  onUpdatePerson
+}: {
+  people: Person[];
+  parentCounts: Record<string, number>;
+  peopleGenerationLabels: Record<string, string>;
+  t: Record<string, string>;
+  onBack: () => void;
+  onSelect: (person: Person) => void;
+  onUpdatePerson: (personId: string, patch: Partial<Person>) => void;
+}) {
+  const rows = people
+    .map((person) => ({
+      person,
+      fields: getUnknownEditableFields(person, t),
+      needsGender: !person.gender || person.gender === "unknown",
+      notices: getUnknownNotices(person, parentCounts[person.id] ?? 0, t)
+    }))
+    .filter((row) => row.fields.length > 0 || row.needsGender || row.notices.length > 0)
+    .sort((first, second) => fullName(first.person).localeCompare(fullName(second.person), "es", { sensitivity: "base" }));
+
+  return (
+    <section className="people-view unknowns-view">
+      <header className="people-view-header">
+        <div>
+          <h1>{t.unknowns}</h1>
+          <p className="view-intro">{t.unknownsHint}</p>
+        </div>
+        <div className="people-header-actions">
+          <button className="secondary-action compact-action" type="button" onClick={onBack}>
+            <TreePine size={15} />
+            <span>{t.treeMap}</span>
+          </button>
+        </div>
+      </header>
+
+      {rows.length === 0 ? (
+        <div className="empty-state unknowns-empty">
+          <Fingerprint size={34} />
+          <h2>{t.noUnknowns}</h2>
+          <p>{t.noUnknownsHint}</p>
+        </div>
+      ) : (
+        <div className="unknowns-list">
+          {rows.map(({ person, fields, needsGender, notices }) => (
+            <article className="unknowns-card" key={person.id}>
+              <div className="unknowns-card-header">
+                <span className="portrait small" style={{ backgroundImage: person.photoUrl ? `url(${person.photoUrl})` : undefined }}>
+                  {!person.photoUrl ? person.givenName.slice(0, 1) || "?" : null}
+                </span>
+                <div>
+                  <h2>{fullName(person) || t.person}</h2>
+                  <small>{peopleGenerationLabels[person.id] ?? t.emptyValue}</small>
+                </div>
+                <button className="secondary-action compact-action" type="button" onClick={() => onSelect(person)}>
+                  <Pencil size={15} />
+                  <span>{t.editPerson}</span>
+                </button>
+              </div>
+
+              {fields.length > 0 || needsGender ? (
+                <div className="unknown-fields">
+                  {fields.map((field) => (
+                    <UnknownFieldInput
+                      field={field}
+                      key={field.key}
+                      person={person}
+                      t={t}
+                      onUpdatePerson={onUpdatePerson}
+                    />
+                  ))}
+                  {needsGender ? (
+                    <label className="unknown-field">
+                      <span>{t.gender}</span>
+                      <select
+                        defaultValue={person.gender || "unknown"}
+                        onChange={(event) => onUpdatePerson(person.id, { gender: event.target.value as Person["gender"] })}
+                      >
+                        <option value="unknown">{t.unknownGender}</option>
+                        <option value="female">{t.female}</option>
+                        <option value="male">{t.male}</option>
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {notices.length > 0 ? (
+                <div className="unknown-notices">
+                  {notices.map((notice) => (
+                    <span key={notice}>{notice}</span>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UnknownFieldInput({
+  field,
+  person,
+  t,
+  onUpdatePerson
+}: {
+  field: UnknownEditableField;
+  person: Person;
+  t: Record<string, string>;
+  onUpdatePerson: (personId: string, patch: Partial<Person>) => void;
+}) {
+  function save(value: string) {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) return;
+    onUpdatePerson(person.id, { [field.key]: trimmedValue } as Partial<Person>);
+  }
+
+  return (
+    <label className="unknown-field">
+      <span>{field.label}</span>
+      <input
+        defaultValue=""
+        type={field.type ?? "text"}
+        placeholder={field.placeholder ?? field.label}
+        onBlur={(event) => save(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+function getUnknownEditableFields(person: Person, t: Record<string, string>): UnknownEditableField[] {
+  const birthPlace = splitPlace(person.birthPlace, person.birthCity, person.birthCountry);
+  const fields: UnknownEditableField[] = [];
+
+  if (!person.givenName?.trim()) fields.push({ key: "givenName", label: t.givenName });
+  if (!person.familyName?.trim()) fields.push({ key: "familyName", label: t.familyName });
+  if (!person.birthDate?.trim()) fields.push({ key: "birthDate", label: t.birthDate, placeholder: "DD/MM/AAAA" });
+  if (!person.birthTime?.trim()) fields.push({ key: "birthTime", label: t.birthTime, type: "time" });
+  if (!birthPlace.city.trim()) fields.push({ key: "birthCity", label: t.birthCity });
+  if (!birthPlace.country.trim()) fields.push({ key: "birthCountry", label: t.birthCountry });
+  if ((person.isDeceased || person.deathDate) && !person.deathDate?.trim()) {
+    fields.push({ key: "deathDate", label: t.deathDate, placeholder: "DD/MM/AAAA" });
+  }
+
+  return fields;
+}
+
+function getUnknownNotices(person: Person, parentCount: number, t: Record<string, string>) {
+  const notices: string[] = [];
+
+  if (parentCount < 2) {
+    notices.push(t.missingParents.replace("{count}", String(parentCount)));
+  }
+  if (!person.photoUrl) {
+    notices.push(t.missingPhoto);
+  }
+
+  return notices;
 }
 
 function GivenNameMeaningPanel({
