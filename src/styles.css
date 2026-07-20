@@ -6423,10 +6423,12 @@ button.calendar-day {
 }
 
 .couple-row {
+  --tree-parent-align-x: 0px;
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
+  transform: translateX(var(--tree-parent-align-x));
 }
 
 .couple-row > * {

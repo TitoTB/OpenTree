@@ -23,6 +23,7 @@ type BranchSide = "left" | "right";
 const TREE_GENERATION_ROW_HEIGHT = 170;
 const TREE_SIBLING_CARD_GAP = 24;
 const TREE_MAX_SIBLING_COMPACTION = 180;
+const TREE_MAX_PARENT_ALIGNMENT = 260;
 
 interface TreeViewProps {
   node: TreeNode | TreeNode[] | null;
@@ -75,6 +76,7 @@ export function TreeView({
       let stageRect = stage.getBoundingClientRect();
       let scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
       compactSiblingRows(stage, scaleX || 1);
+      alignParentRowsToChildren(stage, scaleX || 1);
       stageRect = stage.getBoundingClientRect();
       scaleX = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1;
       const scaleY = stage.offsetHeight > 0 ? stageRect.height / stage.offsetHeight : scaleX;
@@ -731,6 +733,62 @@ function compactSiblingRows(stage: HTMLElement, scaleX: number) {
       cursor += entry.width + desiredGap;
     });
   });
+}
+
+function alignParentRowsToChildren(stage: HTMLElement, scaleX: number) {
+  stage.querySelectorAll<HTMLElement>(".couple-row").forEach((coupleRow) => {
+    coupleRow.style.setProperty("--tree-parent-align-x", "0px");
+  });
+
+  const branches = Array.from(stage.querySelectorAll<HTMLElement>("[data-tree-branch-id]")).sort(
+    (first, second) => getDomDepth(second) - getDomDepth(first)
+  );
+
+  branches.forEach((branch) => {
+    const coupleRow = branch.querySelector<HTMLElement>(":scope > .couple-row");
+    const childrenRow = branch.querySelector<HTMLElement>(":scope > .children-row");
+    if (!coupleRow || !childrenRow) return;
+
+    const parentCards = getCoupleRowPeople(coupleRow)
+      .filter((treePerson) => treePerson.dataset.timelineVisible !== "false")
+      .map((treePerson) => treePerson.querySelector<HTMLElement>(".person-card"))
+      .filter((card): card is HTMLElement => Boolean(card));
+    const childCards = Array.from(childrenRow.querySelectorAll<HTMLElement>(":scope > [data-tree-branch-id]"))
+      .map((childBranch) =>
+        childBranch.querySelector<HTMLElement>(
+          ':scope > .couple-row > .tree-person[data-primary-anchor="true"] .person-card'
+        )
+      )
+      .filter((card): card is HTMLElement => {
+        const treePerson = card?.closest<HTMLElement>(".tree-person");
+        return Boolean(card) && treePerson?.dataset.timelineVisible !== "false";
+      });
+
+    if (parentCards.length === 0 || childCards.length === 0) return;
+
+    const parentRect = getCenteredRect(parentCards.map((card) => card.getBoundingClientRect()));
+    const childRect = getCenteredRect(childCards.map((card) => card.getBoundingClientRect()));
+    const parentCenter = parentRect.left + parentRect.width / 2;
+    const childCenter = childRect.left + childRect.width / 2;
+    const localShift = Math.max(
+      -TREE_MAX_PARENT_ALIGNMENT,
+      Math.min(TREE_MAX_PARENT_ALIGNMENT, (childCenter - parentCenter) / (scaleX || 1))
+    );
+
+    if (Math.abs(localShift) > 1) {
+      coupleRow.style.setProperty("--tree-parent-align-x", `${formatCoord(localShift)}px`);
+    }
+  });
+}
+
+function getDomDepth(element: HTMLElement) {
+  let depth = 0;
+  let current = element.parentElement;
+  while (current) {
+    depth += 1;
+    current = current.parentElement;
+  }
+  return depth;
 }
 
 function getBranchSide(index: number, total: number): BranchSide | undefined {
