@@ -1,6 +1,6 @@
 {
   "name": "opentree",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "type": "module",
   "description": "OpenTree is a private, local-first genealogy app for building family trees.",

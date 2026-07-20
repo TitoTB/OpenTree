@@ -136,29 +136,11 @@ export function TreeView({
           };
         });
         const childCenterX = childPoints.reduce((total, point) => total + point.x, 0) / childPoints.length;
-        const singleAlignedChild = childPoints.length === 1 && Math.abs(childCenterX - childPoints[0].x) < 10;
-        if (singleAlignedChild) {
-          const childX = childPoints[0].x;
-          if (Math.abs(relationshipX - childX) > 0.5) {
-            nextConnectors.push({
-              d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} H ${formatCoord(childX)}`
-            });
-          }
-          nextConnectors.push({
-            d: `M ${formatCoord(childX)} ${formatCoord(parentBottomY)} V ${formatCoord(childPoints[0].y)}`
-          });
-          return;
-        }
-        const horizontalXs = [childCenterX, ...childPoints.map((point) => point.x)];
+        const horizontalXs = [relationshipX, childCenterX, ...childPoints.map((point) => point.x)];
         const minX = Math.min(...horizontalXs);
         const maxX = Math.max(...horizontalXs);
 
-        if (Math.abs(relationshipX - childCenterX) > 0.5) {
-          nextConnectors.push({
-            d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} H ${formatCoord(childCenterX)}`
-          });
-        }
-        nextConnectors.push({ d: `M ${formatCoord(childCenterX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
+        nextConnectors.push({ d: `M ${formatCoord(relationshipX)} ${formatCoord(parentBottomY)} V ${formatCoord(junctionY)}` });
         if (maxX - minX > 0.5) {
           nextConnectors.push({ d: `M ${formatCoord(minX)} ${formatCoord(junctionY)} H ${formatCoord(maxX)}` });
         }
